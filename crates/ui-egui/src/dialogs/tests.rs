@@ -1,19 +1,19 @@
 //! The dialog registry and the shared frame, drawn headlessly.
 
 use serde_json::json;
-use vectorcraft_engine::Session;
+use vectorz_engine::Session;
 
 use super::*;
 use crate::theme;
 
-fn app() -> VectorcraftApp {
-    let mut app = VectorcraftApp::new(Session::new(), Default::default());
+fn app() -> VectorzApp {
+    let mut app = VectorzApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app
 }
 
 /// One headless frame of the dialog layer.
-fn frame(app: &mut VectorcraftApp, input: egui::RawInput) {
+fn frame(app: &mut VectorzApp, input: egui::RawInput) {
     let ctx = egui::Context::default();
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
@@ -26,11 +26,11 @@ fn enter() -> egui::RawInput {
     egui::RawInput { events: vec![key], ..Default::default() }
 }
 
-fn open(app: &mut VectorcraftApp, kind: &str, fields: serde_json::Value) {
+fn open(app: &mut VectorzApp, kind: &str, fields: serde_json::Value) {
     app.ui.dialog = Some(Dialog::new(kind, fields));
 }
 
-fn objects(app: &VectorcraftApp) -> usize {
+fn objects(app: &VectorzApp) -> usize {
     app.session.doc().unwrap().doc.layers.iter().map(|l| l.children().map_or(0, |c| c.len())).sum()
 }
 
@@ -201,16 +201,16 @@ fn raster_filter_dialogs_preview_and_apply() {
         frame(&mut app, Default::default());
         assert!(app.session.in_interaction(), "{effect}: previews");
         confirm(&mut app).unwrap();
-        let n = app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().clone();
+        let n = app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().clone();
         assert_eq!(n.appearance.effects.len(), 1, "{effect}");
         assert_eq!(n.appearance.effects[0].params[key], v, "{effect}");
     }
     // Fields follow the effect's documented order (its dialog's), not the alphabet.
-    let doc = vectorcraft_effects::effect_info("blur.smart").unwrap().params;
+    let doc = vectorz_effects::effect_info("blur.smart").unwrap().params;
     let ranks: Vec<usize> = ["radius", "threshold", "quality"].iter().map(|k| super::effect::doc_rank(doc, k)).collect();
     assert!(ranks.windows(2).all(|w| w[0] < w[1]), "{ranks:?}");
     assert_eq!(super::effect::doc_rank(doc, "nope"), usize::MAX);
-    let doc = vectorcraft_effects::effect_info("pixelate.colorHalftone").unwrap().params;
+    let doc = vectorz_effects::effect_info("pixelate.colorHalftone").unwrap().params;
     let ranks: Vec<usize> = ["maxRadius", "channel1", "channel2", "channel3", "channel4"].iter().map(|k| super::effect::doc_rank(doc, k)).collect();
     assert!(ranks.windows(2).all(|w| w[0] < w[1]) && ranks[4] < usize::MAX, "{ranks:?}");
     // Labels as the dialogs show them.
@@ -218,7 +218,7 @@ fn raster_filter_dialogs_preview_and_apply() {
     assert_eq!(super::form::humanize("channel3"), "Channel 3:");
     assert_eq!(super::form::humanize("cellSize"), "Cell Size:");
     assert_eq!(super::form::humanize("lightDirection"), "Light Direction:");
-    let doc = vectorcraft_effects::effect_info("texture.texturizer").unwrap().params;
+    let doc = vectorz_effects::effect_info("texture.texturizer").unwrap().params;
     let ranks: Vec<usize> = ["texture", "scaling", "relief", "lightDirection", "invert"].iter().map(|k| super::effect::doc_rank(doc, k)).collect();
     assert!(ranks.windows(2).all(|w| w[0] < w[1]) && ranks[4] < usize::MAX, "{ranks:?}");
 }
@@ -231,7 +231,7 @@ fn effect_dialog_applies_to_its_appearance_item() {
     app.run("effect.dialog", json!({"effect": "distort.roughen", "item": 1})).unwrap();
     frame(&mut app, Default::default());
     confirm(&mut app).unwrap();
-    let n = app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().clone();
+    let n = app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().clone();
     assert_eq!(n.appearance.items[1].effects().len(), 1, "the effect goes to the stroke");
     assert!(n.appearance.effects.is_empty() && n.appearance.items[0].effects().is_empty());
 }
@@ -258,7 +258,7 @@ fn revolve_dialog_preview_cancel_confirm_and_undo() {
 
 #[test]
 fn extrude_inflate_and_rotate_dialogs_preview_confirm_and_undo() {
-    for effect in vectorcraft_effects::SOLIDS {
+    for effect in vectorz_effects::SOLIDS {
         let mut app = app();
         app.run("path.create", json!({"d":"M100 100 L200 100 L200 200 L100 200 Z"})).unwrap();
         app.run("select.all", json!({})).unwrap();
@@ -290,7 +290,7 @@ fn dialogs_are_as_tall_as_their_content() {
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
-    let height = |app: &mut VectorcraftApp, kind: &str, fields: serde_json::Value| {
+    let height = |app: &mut VectorzApp, kind: &str, fields: serde_json::Value| {
         open(app, kind, fields);
         for _ in 0..30 {
             let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
@@ -353,7 +353,7 @@ fn dialogs_do_not_stretch_to_the_screen() {
 }
 
 /// The dialog window of `app`'s open dialog after a few frames in a `w` × 900 window.
-fn dialog_rect(app: &mut VectorcraftApp, w: f32) -> egui::Rect {
+fn dialog_rect(app: &mut VectorzApp, w: f32) -> egui::Rect {
     let ctx = egui::Context::default();
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
@@ -459,7 +459,7 @@ fn given_headings_are_shown_as_they_are() {
 struct PluginIntField {
     ctx: egui::Context,
     d: Dialog,
-    specs: Vec<(String, vectorcraft_plugins::ParamSpec)>,
+    specs: Vec<(String, vectorz_plugins::ParamSpec)>,
     pos: egui::Pos2,
 }
 
@@ -468,7 +468,7 @@ impl PluginIntField {
         let ctx = egui::Context::default();
         theme::install_fonts(&ctx);
         theme::apply(&ctx, Default::default());
-        let specs = vec![("seed".into(), vectorcraft_plugins::ParamSpec::Int { min, max, default: 0 })];
+        let specs = vec![("seed".into(), vectorz_plugins::ParamSpec::Int { min, max, default: 0 })];
         let mut f = PluginIntField { ctx, d: Dialog::new(plugin::KIND, json!({ "seed": start })), specs, pos: egui::Pos2::ZERO };
         fn number_rect(shape: &egui::Shape, text: &str) -> Option<egui::Rect> {
             match shape {
@@ -545,12 +545,12 @@ fn a_dialog_opens_with_its_first_field_focused_so_typing_and_enter_apply() {
     let ctx = egui::Context::default();
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
-    let frame = |app: &mut VectorcraftApp, events: Vec<egui::Event>| {
+    let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
         let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| show(app, ui.ctx()));
         out.textures_delta.clear();
     };
     let enter = || egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
-    let bounds = |app: &VectorcraftApp| app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().geometric_bounds().unwrap();
+    let bounds = |app: &VectorzApp| app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().geometric_bounds().unwrap();
     // Object › Transform › Rotate…: type 90 over the angle, press Enter.
     crate::menus::invoke(&mut app, "object.rotate", json!({}));
     frame(&mut app, vec![]);
@@ -582,7 +582,7 @@ fn a_dialog_opens_with_its_first_field_focused_so_typing_and_enter_apply() {
     frame(&mut app, vec![egui::Event::Text("50".into())]);
     frame(&mut app, vec![enter()]);
     assert!(app.ui.dialog.is_none());
-    let node = app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().clone();
+    let node = app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().clone();
     assert_eq!(node.appearance.effects.last().map(|e| e.params["scaleH"].clone()), Some(json!(50.0)));
 }
 
@@ -596,7 +596,7 @@ fn a_dialog_opened_by_a_click_focuses_its_first_field_each_time_it_opens() {
     let ctx = egui::Context::default();
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
-    let frame = |app: &mut VectorcraftApp, events: Vec<egui::Event>| {
+    let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
         let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| show(app, ui.ctx()));
         out.textures_delta.clear();
     };
@@ -606,7 +606,7 @@ fn a_dialog_opened_by_a_click_focuses_its_first_field_each_time_it_opens() {
         let press = |pressed| egui::Event::PointerButton { pos, button, pressed, modifiers };
         vec![egui::Event::PointerMoved(pos), press(true), press(false)]
     };
-    type Open = fn(&mut VectorcraftApp);
+    type Open = fn(&mut VectorzApp);
     let opens: [(&str, Open); 2] = [
         ("Convert to Shape", |app| drop(app.run("effect.dialog", json!({"effect": "convertToShape.rectangle"})))),
         ("Rasterize", |app| crate::menus::invoke(app, "object.rasterize", json!({}))),
@@ -637,7 +637,7 @@ fn a_dialogs_focus_skips_a_greyed_out_first_field() {
     let ctx = egui::Context::default();
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
-    let frame = |app: &mut VectorcraftApp, events: Vec<egui::Event>| {
+    let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
         let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| show(app, ui.ctx()));
         out.textures_delta.clear();
     };
@@ -668,7 +668,7 @@ fn object_mosaic_makes_the_grid_typed_in_its_dialog() {
     let ctx = egui::Context::default();
     theme::install_fonts(&ctx);
     theme::apply(&ctx, Default::default());
-    let frame = |app: &mut VectorcraftApp, events: Vec<egui::Event>| {
+    let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
         let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| show(app, ui.ctx()));
         out.textures_delta.clear();
     };
@@ -693,7 +693,7 @@ fn object_mosaic_makes_the_grid_typed_in_its_dialog() {
 /// #793: Artboard Options lists its fields as Name, Width, Height, not by key.
 #[test]
 fn artboard_options_lists_name_then_width_and_height() {
-    let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+    let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
     app.session.execute("file.new", &json!({"width": 612, "height": 792})).unwrap();
     open(&mut app, "artboardOptions", json!({"index": 0, "name": "Artboard 1", "width": 612, "height": 792, "x": 0, "y": 0}));
     let text = crate::tests_labels::painted_text(&mut app, |app, ui| show(app, ui.ctx()));
@@ -726,7 +726,7 @@ fn the_transform_effect_dialog_has_its_controls_previews_them_and_shows_them_aga
         assert!(text.lines().any(|l| l == s), "{s} in {text}");
     }
     assert!(app.session.in_interaction(), "the preview runs");
-    let effect = |app: &VectorcraftApp| app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().appearance.effects[0].clone();
+    let effect = |app: &VectorzApp| app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0].clone();
     // The reference point and Random update the preview.
     let d = app.ui.dialog.as_mut().unwrap();
     for (k, v) in [("moveH", json!(30)), ("copies", json!(3)), ("reference", json!(8))] {
@@ -739,7 +739,7 @@ fn the_transform_effect_dialog_has_its_controls_previews_them_and_shows_them_aga
     assert_eq!(effect(&app).params["random"], json!(true));
     confirm(&mut app).unwrap();
     assert!(!app.session.in_interaction());
-    assert_eq!(app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().appearance.effects.len(), 1);
+    assert_eq!(app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects.len(), 1);
     // Editing it from the Appearance panel shows the same values.
     app.run("effect.dialog", json!({"effect": "distort.transform", "index": 0})).unwrap();
     let d = app.ui.dialog.as_ref().unwrap();
@@ -763,7 +763,7 @@ fn artboard_options_position_moves_art_only_with_the_tool_option_on() {
         super::confirm(&mut app).unwrap();
         assert_eq!(app.session.doc().unwrap().doc.artboards[0].rect.x0, 50.0);
         assert_eq!(
-            app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().geometric_bounds().unwrap().x0,
+            app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().geometric_bounds().unwrap().x0,
             if move_art { 60.0 } else { 10.0 }
         );
         app.run("edit.undo", json!({})).unwrap();
@@ -788,8 +788,8 @@ fn zig_zag_has_sliders_and_radio_buttons() {
 
 #[test]
 fn polar_grid_shared_canvas_click_defaults_units_counts_and_history() {
-    use vectorcraft_doc::NodeId;
-    use vectorcraft_tools::{PointerEvent, PointerKind};
+    use vectorz_doc::NodeId;
+    use vectorz_tools::{PointerEvent, PointerKind};
     let mut app = app();
     app.select_tool("polarGrid");
     app.run("tool.setOption", json!({"tool": "polarGrid", "values": {"concentric": 2, "radial": 3}})).unwrap();
@@ -826,7 +826,7 @@ fn polar_grid_shared_canvas_click_defaults_units_counts_and_history() {
 /// stores them.
 #[test]
 fn polar_grid_dialog_edits_skews_compound_and_fill() {
-    use vectorcraft_doc::{NodeId, NodeKind};
+    use vectorz_doc::{NodeId, NodeKind};
     let mut app = app();
     app.run("paint.setFill", json!({"color": "#ff0000"})).unwrap();
     app.run("tool.setOption", json!({"tool": "polarGrid", "values": {"concentric": 3, "radial": 4, "radialSkew": 500}})).unwrap();
@@ -860,7 +860,7 @@ fn polar_grid_dialog_edits_skews_compound_and_fill() {
     let children = s.doc.node(NodeId(result["id"].as_u64().unwrap())).unwrap().children().unwrap();
     // Two rings under four radial dividers, all in the current fill.
     assert_eq!(children.iter().map(|n| matches!(n.kind, NodeKind::Compound { .. })).collect::<Vec<_>>(), [true, true, false, false, false, false]);
-    assert!(children.iter().all(|n| n.appearance.fill().is_some_and(|f| f.paint != vectorcraft_color::Paint::None)));
+    assert!(children.iter().all(|n| n.appearance.fill().is_some_and(|f| f.paint != vectorz_color::Paint::None)));
     let widths: Vec<f64> = children[0].children().unwrap().iter().map(|n| n.geometric_bounds().unwrap().width()).collect();
     assert!((widths[0] - 100.0).abs() < 1e-6 && (widths[1] - 93.75).abs() < 1e-6, "outward: {widths:?}");
     let tips: Vec<f64> = children[3..].iter().map(|n| n.path_data().unwrap().subpaths[0].anchors[1].p.x).collect();
@@ -885,7 +885,7 @@ fn polar_grid_shared_cancel_reopen_zero_counts_and_failed_creation() {
         app.ui.dialog.as_mut().unwrap().fields.insert(key.into(), json!(0));
     }
     let result = confirm(&mut app).unwrap();
-    let group = app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(result["id"].as_u64().unwrap())).unwrap();
+    let group = app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(result["id"].as_u64().unwrap())).unwrap();
     assert_eq!(group.children().unwrap().len(), 1);
     assert!(group.children().unwrap()[0].path_data().unwrap().is_closed());
     open_tool_dialog(&mut app, "polarGrid", json!({"x": 10, "y": 20}));

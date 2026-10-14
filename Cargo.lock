@@ -4505,7 +4505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vectorcraft"
+name = "vectorz"
 version = "0.10.0"
 dependencies = [
  "arboard",
@@ -4527,9 +4527,9 @@ dependencies = [
  "rfd",
  "serde_json",
  "socket2",
- "vectorcraft-engine",
- "vectorcraft-text",
- "vectorcraft-ui-egui",
+ "vectorz-engine",
+ "vectorz-text",
+ "vectorz-ui-egui",
  "wayland-client",
  "wayland-protocols",
  "webbrowser",
@@ -4540,7 +4540,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vectorcraft-affinity"
+name = "vectorz-affinity"
 version = "0.10.0"
 dependencies = [
  "crc32fast",
@@ -4551,57 +4551,57 @@ dependencies = [
 ]
 
 [[package]]
-name = "vectorcraft-brush"
+name = "vectorz-brush"
 version = "0.10.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde",
  "serde_json",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-geom",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-geom",
 ]
 
 [[package]]
-name = "vectorcraft-cad"
+name = "vectorz-cad"
 version = "0.10.0"
 dependencies = [
  "image",
  "kurbo 0.13.1",
  "serde_json",
- "vectorcraft-brush",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-geom",
- "vectorcraft-pathops",
- "vectorcraft-text",
+ "vectorz-brush",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-geom",
+ "vectorz-pathops",
+ "vectorz-text",
 ]
 
 [[package]]
-name = "vectorcraft-cli"
+name = "vectorz-cli"
 version = "0.10.0"
 dependencies = [
  "log",
  "objc2-core-foundation",
  "objc2-core-text",
  "serde_json",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-engine",
- "vectorcraft-format",
- "vectorcraft-geom",
- "vectorcraft-mcp",
- "vectorcraft-render",
- "vectorcraft-svg",
- "vectorcraft-testkit",
- "vectorcraft-text",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-engine",
+ "vectorz-format",
+ "vectorz-geom",
+ "vectorz-mcp",
+ "vectorz-render",
+ "vectorz-svg",
+ "vectorz-testkit",
+ "vectorz-text",
  "windows",
  "winsafe",
 ]
 
 [[package]]
-name = "vectorcraft-color"
+name = "vectorz-color"
 version = "0.10.0"
 dependencies = [
  "kurbo 0.13.1",
@@ -4613,7 +4613,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vectorcraft-doc"
+name = "vectorz-doc"
 version = "0.10.0"
 dependencies = [
  "image",
@@ -4624,28 +4624,28 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tiff",
- "vectorcraft-color",
- "vectorcraft-geom",
+ "vectorz-color",
+ "vectorz-geom",
  "zune-jpeg",
 ]
 
 [[package]]
-name = "vectorcraft-effects"
+name = "vectorz-effects"
 version = "0.10.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde_json",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-geom",
- "vectorcraft-pathops",
- "vectorcraft-plugins",
- "vectorcraft-text",
- "vectorcraft-three-d",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-geom",
+ "vectorz-pathops",
+ "vectorz-plugins",
+ "vectorz-text",
+ "vectorz-three-d",
 ]
 
 [[package]]
-name = "vectorcraft-engine"
+name = "vectorz-engine"
 version = "0.10.0"
 dependencies = [
  "crc32fast",
@@ -4658,30 +4658,30 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "vectorcraft-affinity",
- "vectorcraft-brush",
- "vectorcraft-cad",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-eps",
- "vectorcraft-format",
- "vectorcraft-geom",
- "vectorcraft-metafile",
- "vectorcraft-pathops",
- "vectorcraft-pdf",
- "vectorcraft-plugins",
- "vectorcraft-render",
- "vectorcraft-scriptcheck",
- "vectorcraft-svg",
- "vectorcraft-testkit",
- "vectorcraft-text",
- "vectorcraft-tools",
- "vectorcraft-trace",
+ "vectorz-affinity",
+ "vectorz-brush",
+ "vectorz-cad",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-eps",
+ "vectorz-format",
+ "vectorz-geom",
+ "vectorz-metafile",
+ "vectorz-pathops",
+ "vectorz-pdf",
+ "vectorz-plugins",
+ "vectorz-render",
+ "vectorz-scriptcheck",
+ "vectorz-svg",
+ "vectorz-testkit",
+ "vectorz-text",
+ "vectorz-tools",
+ "vectorz-trace",
  "wat",
 ]
 
 [[package]]
-name = "vectorcraft-eps"
+name = "vectorz-eps"
 version = "0.10.0"
 dependencies = [
  "flate2",
@@ -4689,20 +4689,20 @@ dependencies = [
  "kurbo 0.13.1",
  "ruzstd",
  "serde_json",
- "vectorcraft-brush",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-geom",
- "vectorcraft-metafile",
- "vectorcraft-pdf",
- "vectorcraft-render",
- "vectorcraft-testkit",
- "vectorcraft-text",
+ "vectorz-brush",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-geom",
+ "vectorz-metafile",
+ "vectorz-pdf",
+ "vectorz-render",
+ "vectorz-testkit",
+ "vectorz-text",
 ]
 
 [[package]]
-name = "vectorcraft-format"
+name = "vectorz-format"
 version = "0.10.0"
 dependencies = [
  "flate2",
@@ -4711,13 +4711,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "vectorcraft-doc",
- "vectorcraft-geom",
- "vectorcraft-testkit",
+ "vectorz-doc",
+ "vectorz-geom",
+ "vectorz-testkit",
 ]
 
 [[package]]
-name = "vectorcraft-geom"
+name = "vectorz-geom"
 version = "0.10.0"
 dependencies = [
  "kurbo 0.13.1",
@@ -4725,11 +4725,11 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "vectorcraft-testkit",
+ "vectorz-testkit",
 ]
 
 [[package]]
-name = "vectorcraft-mcp"
+name = "vectorz-mcp"
 version = "0.10.0"
 dependencies = [
  "image",
@@ -4737,44 +4737,44 @@ dependencies = [
  "proptest",
  "serde_json",
  "socket2",
- "vectorcraft-doc",
- "vectorcraft-engine",
- "vectorcraft-format",
- "vectorcraft-geom",
- "vectorcraft-render",
- "vectorcraft-svg",
- "vectorcraft-testkit",
- "vectorcraft-tools",
+ "vectorz-doc",
+ "vectorz-engine",
+ "vectorz-format",
+ "vectorz-geom",
+ "vectorz-render",
+ "vectorz-svg",
+ "vectorz-testkit",
+ "vectorz-tools",
 ]
 
 [[package]]
-name = "vectorcraft-metafile"
+name = "vectorz-metafile"
 version = "0.10.0"
 dependencies = [
  "image",
  "kurbo 0.13.1",
- "vectorcraft-brush",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-geom",
- "vectorcraft-text",
+ "vectorz-brush",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-geom",
+ "vectorz-text",
 ]
 
 [[package]]
-name = "vectorcraft-pathops"
+name = "vectorz-pathops"
 version = "0.10.0"
 dependencies = [
  "kurbo 0.13.1",
  "linesweeper",
  "proptest",
  "thiserror 2.0.21",
- "vectorcraft-geom",
- "vectorcraft-testkit",
+ "vectorz-geom",
+ "vectorz-testkit",
 ]
 
 [[package]]
-name = "vectorcraft-pdf"
+name = "vectorz-pdf"
 version = "0.10.0"
 dependencies = [
  "aes",
@@ -4793,32 +4793,32 @@ dependencies = [
  "skrifa 0.47.0",
  "smallvec",
  "thiserror 2.0.21",
- "vectorcraft-brush",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-geom",
- "vectorcraft-testkit",
- "vectorcraft-text",
+ "vectorz-brush",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-geom",
+ "vectorz-testkit",
+ "vectorz-text",
  "weezl",
 ]
 
 [[package]]
-name = "vectorcraft-plugins"
+name = "vectorz-plugins"
 version = "0.10.0"
 dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-geom",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-geom",
  "wasmi",
  "wat",
 ]
 
 [[package]]
-name = "vectorcraft-render"
+name = "vectorz-render"
 version = "0.10.0"
 dependencies = [
  "flate2",
@@ -4830,27 +4830,27 @@ dependencies = [
  "psd",
  "serde_json",
  "tiff",
- "vectorcraft-brush",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-geom",
- "vectorcraft-testkit",
- "vectorcraft-text",
+ "vectorz-brush",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-geom",
+ "vectorz-testkit",
+ "vectorz-text",
  "vello_common 0.2.0",
  "vello_cpu 0.2.0",
  "weezl",
 ]
 
 [[package]]
-name = "vectorcraft-scriptcheck"
+name = "vectorz-scriptcheck"
 version = "0.10.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
-name = "vectorcraft-svg"
+name = "vectorz-svg"
 version = "0.10.0"
 dependencies = [
  "flate2",
@@ -4864,34 +4864,34 @@ dependencies = [
  "svgtypes 0.16.1",
  "thiserror 2.0.21",
  "usvg 0.48.1",
- "vectorcraft-brush",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-geom",
- "vectorcraft-testkit",
- "vectorcraft-text",
+ "vectorz-brush",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-geom",
+ "vectorz-testkit",
+ "vectorz-text",
 ]
 
 [[package]]
-name = "vectorcraft-testkit"
+name = "vectorz-testkit"
 version = "0.10.0"
 dependencies = [
  "image",
  "kurbo 0.13.1",
  "proptest",
  "serde_json",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-engine",
- "vectorcraft-format",
- "vectorcraft-geom",
- "vectorcraft-render",
- "vectorcraft-svg",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-engine",
+ "vectorz-format",
+ "vectorz-geom",
+ "vectorz-render",
+ "vectorz-svg",
 ]
 
 [[package]]
-name = "vectorcraft-text"
+name = "vectorz-text"
 version = "0.10.0"
 dependencies = [
  "harfrust 0.13.3",
@@ -4904,37 +4904,37 @@ dependencies = [
  "unicode-general-category",
  "unicode-script",
  "unicode-segmentation",
- "vectorcraft-doc",
- "vectorcraft-geom",
+ "vectorz-doc",
+ "vectorz-geom",
  "windows-registry",
  "write-fonts",
 ]
 
 [[package]]
-name = "vectorcraft-three-d"
+name = "vectorz-three-d"
 version = "0.10.0"
 dependencies = [
- "vectorcraft-geom",
- "vectorcraft-pathops",
+ "vectorz-geom",
+ "vectorz-pathops",
 ]
 
 [[package]]
-name = "vectorcraft-tools"
+name = "vectorz-tools"
 version = "0.10.0"
 dependencies = [
  "image",
  "kurbo 0.13.1",
  "serde",
  "serde_json",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-geom",
- "vectorcraft-pathops",
- "vectorcraft-text",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-geom",
+ "vectorz-pathops",
+ "vectorz-text",
 ]
 
 [[package]]
-name = "vectorcraft-trace"
+name = "vectorz-trace"
 version = "0.10.0"
 dependencies = [
  "image",
@@ -4942,11 +4942,11 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "vectorcraft-geom",
+ "vectorz-geom",
 ]
 
 [[package]]
-name = "vectorcraft-ui-egui"
+name = "vectorz-ui-egui"
 version = "0.10.0"
 dependencies = [
  "craft-ui",
@@ -4958,28 +4958,28 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
- "vectorcraft-brush",
- "vectorcraft-cad",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-effects",
- "vectorcraft-engine",
- "vectorcraft-eps",
- "vectorcraft-format",
- "vectorcraft-geom",
- "vectorcraft-pdf",
- "vectorcraft-plugins",
- "vectorcraft-render",
- "vectorcraft-svg",
- "vectorcraft-testkit",
- "vectorcraft-text",
- "vectorcraft-three-d",
- "vectorcraft-tools",
+ "vectorz-brush",
+ "vectorz-cad",
+ "vectorz-color",
+ "vectorz-doc",
+ "vectorz-effects",
+ "vectorz-engine",
+ "vectorz-eps",
+ "vectorz-format",
+ "vectorz-geom",
+ "vectorz-pdf",
+ "vectorz-plugins",
+ "vectorz-render",
+ "vectorz-svg",
+ "vectorz-testkit",
+ "vectorz-text",
+ "vectorz-three-d",
+ "vectorz-tools",
  "wat",
 ]
 
 [[package]]
-name = "vectorcraft-web"
+name = "vectorz-web"
 version = "0.10.0"
 dependencies = [
  "eframe",
@@ -4987,10 +4987,10 @@ dependencies = [
  "js-sys",
  "log",
  "rfd",
- "vectorcraft-engine",
- "vectorcraft-format",
- "vectorcraft-text",
- "vectorcraft-ui-egui",
+ "vectorz-engine",
+ "vectorz-format",
+ "vectorz-text",
+ "vectorz-ui-egui",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

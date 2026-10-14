@@ -34,10 +34,10 @@ use std::sync::Arc;
 
 use kurbo::{Affine, Rect};
 use serde::Serialize;
-use vectorcraft_color::cms::{self, ProfileKind};
-use vectorcraft_doc::marks::PrinterMarks;
-use vectorcraft_doc::overprint::{clear_overprints, multiply_overprints};
-use vectorcraft_doc::{ColorMode, Document, Node, NodeKind};
+use vectorz_color::cms::{self, ProfileKind};
+use vectorz_doc::marks::PrinterMarks;
+use vectorz_doc::overprint::{clear_overprints, multiply_overprints};
+use vectorz_doc::{ColorMode, Document, Node, NodeKind};
 
 pub use layout::{MAX_TILES, TileGrid};
 pub use plates::print_inks;
@@ -159,7 +159,7 @@ pub fn keep_layers(nodes: &mut Vec<Arc<Node>>, which: PrintLayers) {
 /// only the layers that print, overprints in composite output as [`PrintAdvanced::overprints`]
 /// says.
 pub fn printed_document<'a>(doc: &'a Document, set: &PrintSettings) -> Cow<'a, Document> {
-    let mut doc = vectorcraft_effects::bake_document(doc).map_or(Cow::Borrowed(doc), Cow::Owned);
+    let mut doc = vectorz_effects::bake_document(doc).map_or(Cow::Borrowed(doc), Cow::Owned);
     let d = doc.to_mut();
     keep_layers(&mut d.layers, set.print_layers);
     composite_overprints(d, set);
@@ -353,7 +353,7 @@ pub fn plan<'a>(doc: &'a Document, opts: &PrintOptions) -> Result<PrintPlan<'a>,
     let set = &opts.settings;
     let job = Job::new(doc, set, opts.postscript)?;
     let title = opts.title.clone().unwrap_or_else(|| job.doc.title.clone());
-    let created = opts.created.or_else(vectorcraft_doc::metadata::now_unix);
+    let created = opts.created.or_else(vectorz_doc::metadata::now_unix);
     let sep = Separator::new(&job.doc, set);
     let plates: Vec<Document> = (0..job.plates.len()).filter_map(|p| job.ink(Some(p))).map(|i| sep.plate(&i.name)).collect();
     let marks = set.marks.printer_marks();

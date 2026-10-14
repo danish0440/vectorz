@@ -8,7 +8,7 @@
 use serde_json::{Value, json};
 
 use super::DialogSpec;
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 
@@ -31,7 +31,7 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
 
 /// Ask `message` (with an optional `detail` line), both in the UI language; OK runs `command`
 /// with `params`.
-pub fn ask(app: &mut VectorcraftApp, message: &str, detail: &str, command: &str, params: Value) {
+pub fn ask(app: &mut VectorzApp, message: &str, detail: &str, command: &str, params: Value) {
     let fields = json!({"message": message, "detail": detail, "__command": command, "__params": params});
     app.ui.dialog = Some(Dialog::new(KIND, fields));
 }
@@ -48,7 +48,7 @@ const MAX_WAITING: usize = 16;
 /// they close. While another dialog is open (the message comes from work in the background) it
 /// waits its turn instead of replacing it: neither what the user was doing there nor the message
 /// is lost.
-pub fn tell(app: &mut VectorcraftApp, message: &str, detail: &str) {
+pub fn tell(app: &mut VectorzApp, message: &str, detail: &str) {
     let d = Dialog::new(MESSAGE, json!({"message": message, "detail": detail}));
     if app.ui.dialog.is_none() {
         app.ui.dialog = Some(d);
@@ -58,14 +58,14 @@ pub fn tell(app: &mut VectorcraftApp, message: &str, detail: &str) {
 }
 
 /// Show the next message that waited for a dialog to close (each frame).
-pub(super) fn show_waiting(app: &mut VectorcraftApp) {
+pub(super) fn show_waiting(app: &mut VectorzApp) {
     if app.ui.dialog.is_none() && !app.ui.told.is_empty() {
         app.ui.dialog = Some(app.ui.told.remove(0));
     }
 }
 
 /// Closes before running, so a dialog the command opens stays open.
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let params = d.fields.get("__params").cloned().unwrap_or_else(|| json!({}));
     app.ui.dialog = None;
     app.run(&d.str("__command"), params)

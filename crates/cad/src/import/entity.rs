@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use kurbo::{BezPath, PathEl};
-use vectorcraft_doc::Justify;
-use vectorcraft_geom::{Affine, Point, Vec2};
+use vectorz_doc::Justify;
+use vectorz_geom::{Affine, Point, Vec2};
 
 use super::curve::{self, Vertex};
 use super::reader::{Groups, Pair, Record, groups, number};

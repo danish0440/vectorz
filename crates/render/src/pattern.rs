@@ -17,9 +17,9 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 
-use vectorcraft_doc::pattern::{Overlap, PatternDef, TileType};
-use vectorcraft_doc::{Document, Node};
-use vectorcraft_geom::{Affine, Rect, Shape};
+use vectorz_doc::pattern::{Overlap, PatternDef, TileType};
+use vectorz_doc::{Document, Node};
+use vectorz_geom::{Affine, Rect, Shape};
 use vello_cpu::peniko::{Extend, ImageQuality, ImageSampler};
 use vello_cpu::{Pixmap, RenderContext};
 
@@ -58,13 +58,13 @@ impl Deps {
         Self {
             art: Self::art(doc).map(Arc::downgrade).collect(),
             pixels: Self::pixels(doc).map(Arc::downgrade).collect(),
-            fonts: vectorcraft_text::FontDb::global().generation(),
+            fonts: vectorz_text::FontDb::global().generation(),
         }
     }
 
     /// Does `doc` hold what the tile was drawn from?
     fn current(&self, doc: &Document) -> bool {
-        self.fonts == vectorcraft_text::FontDb::global().generation()
+        self.fonts == vectorz_text::FontDb::global().generation()
             && self.art.iter().map(Weak::as_ptr).eq(Self::art(doc).map(Arc::as_ptr))
             && self.pixels.iter().map(Weak::as_ptr).eq(Self::pixels(doc).map(Arc::as_ptr))
     }
@@ -286,10 +286,10 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_color::{Color, Paint};
-    use vectorcraft_doc::pattern::{PatternEdit, RepeatSpec, pattern_paint};
-    use vectorcraft_doc::{Appearance, NodeId, NodeKind};
-    use vectorcraft_geom::shapes;
+    use vectorz_color::{Color, Paint};
+    use vectorz_doc::pattern::{PatternEdit, RepeatSpec, pattern_paint};
+    use vectorz_doc::{Appearance, NodeId, NodeKind};
+    use vectorz_geom::shapes;
 
     /// A 20×20 tile with a red 10×10 square in its top-left corner.
     fn doc_with_pattern(tt: TileType) -> Document {
@@ -326,7 +326,7 @@ mod tests {
     /// pattern's paint transform must not resample the effect's raster).
     #[test]
     fn effects_after_a_pattern_fill_keep_their_place_and_size() {
-        let fx = |id: &str, params: serde_json::Value| vectorcraft_doc::Effect { id: id.into(), params, visible: true };
+        let fx = |id: &str, params: serde_json::Value| vectorz_doc::Effect { id: id.into(), params, visible: true };
         for effect in [
             fx("blur.gaussian", serde_json::json!({"radius": 4.0})),
             fx("stylize.dropShadow", serde_json::json!({"x": 6, "y": 6, "blur": 3, "opacity": 100})),
@@ -422,7 +422,7 @@ mod tests {
         assert!(is_red(r.pixel(10, 10)) && is_white(r.pixel(30, 10)) && is_red(r.pixel(50, 10)));
         let mut d2 = d.clone();
         let id = d2.layers[0].children().unwrap()[0].id;
-        vectorcraft_doc::pattern::transform_pattern_paints(d2.node_mut(id).unwrap(), Affine::translate((10.0, 0.0)));
+        vectorz_doc::pattern::transform_pattern_paints(d2.node_mut(id).unwrap(), Affine::translate((10.0, 0.0)));
         let r = render(&d2, 1.0);
         assert!(is_white(r.pixel(5, 5)) && is_red(r.pixel(15, 5)));
     }
@@ -433,7 +433,7 @@ mod tests {
         let mut d = doc_with_pattern(TileType::Grid);
         let square = shapes::rectangle(Rect::new(120.0, 120.0, 160.0, 160.0));
         let mut n = Node::path(d.alloc_id(), square, Appearance::basic(pattern_paint("Checks"), Paint::None, 0.0));
-        vectorcraft_doc::pattern::transform_pattern_paints(&mut n, Affine::scale(s));
+        vectorz_doc::pattern::transform_pattern_paints(&mut n, Affine::scale(s));
         let l = d.layers[0].id;
         d.insert(Some(l), 1, n).unwrap();
         d

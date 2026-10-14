@@ -3,10 +3,10 @@
 // Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md › Robustness).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{AppearanceItem, CharStyle, Dash, Document, LineCap, LineJoin, Node, NodeKind, StrokeLayer, TextObject, TextRun};
-use vectorcraft_geom::Point;
-use vectorcraft_svg::{ExportOptions, export, import};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{AppearanceItem, CharStyle, Dash, Document, LineCap, LineJoin, Node, NodeKind, StrokeLayer, TextObject, TextRun};
+use vectorz_geom::Point;
+use vectorz_svg::{ExportOptions, export, import};
 
 fn text_doc(t: TextObject, items: Vec<AppearanceItem>) -> Document {
     let mut d = Document::new(300.0, 200.0);

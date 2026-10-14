@@ -1,26 +1,26 @@
 [package]
-name = "vectorcraft-eps"
+name = "vectorz-eps"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft Encapsulated PostScript: a hand-written EPS writer (PostScript Level 2 and 3) with TIFF previews"
+description = "VectorZ Encapsulated PostScript: a hand-written EPS writer (PostScript Level 2 and 3) with TIFF previews"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-color = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-effects = { workspace = true }
-vectorcraft-brush = { workspace = true }
-vectorcraft-text = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-color = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-effects = { workspace = true }
+vectorz-brush = { workspace = true }
+vectorz-text = { workspace = true }
 # Windows metafile previews, opened when a file's PostScript can't be read.
-vectorcraft-metafile = { workspace = true }
+vectorz-metafile = { workspace = true }
 # Non-native art in Illustrator editing data (a placed PDF's content, kept as a PDF).
-vectorcraft-pdf = { workspace = true }
+vectorz-pdf = { workspace = true }
 # The TIFF writer (previews) and PackBits, shared with raster export.
-vectorcraft-render = { workspace = true }
+vectorz-render = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
 flate2 = { workspace = true }
@@ -29,4 +29,4 @@ ruzstd = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-vectorcraft-testkit = { workspace = true }
+vectorz-testkit = { workspace = true }

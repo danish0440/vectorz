@@ -7,9 +7,9 @@ use std::io::{Cursor, Read};
 
 use image::{DynamicImage, ImageFormat};
 use serde_json::json;
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{Appearance, Artboard, Document, ImageBlob, ImageObject, Node, NodeKind};
-use vectorcraft_geom::{Affine, Rect, shapes};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{Appearance, Artboard, Document, ImageBlob, ImageObject, Node, NodeKind};
+use vectorz_geom::{Affine, Rect, shapes};
 
 use crate::encrypt::{Lexer, Obj};
 use crate::syntax::{Indirect, indirect};

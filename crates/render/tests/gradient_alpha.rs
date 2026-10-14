@@ -2,11 +2,11 @@
 //! the model samples them ([`Gradient::sample`]) and as the SVG and PDF exports draw them. The colour
 //! of a transparent stop counts: red fading into transparent black darkens as it fades.
 
-use vectorcraft_color::{Color, Gradient, GradientGeom, GradientKind, GradientPaint, GradientStop, Paint};
-use vectorcraft_doc::{Appearance, Document};
-use vectorcraft_geom::{Point, Rect, shapes};
-use vectorcraft_testkit::fixtures::DocBuilder;
-use vectorcraft_testkit::raster::{Image, render_view};
+use vectorz_color::{Color, Gradient, GradientGeom, GradientKind, GradientPaint, GradientStop, Paint};
+use vectorz_doc::{Appearance, Document};
+use vectorz_geom::{Point, Rect, shapes};
+use vectorz_testkit::fixtures::DocBuilder;
+use vectorz_testkit::raster::{Image, render_view};
 
 /// A 100 pt square filled with `gradient` on `geom`.
 fn filled(gradient: &Gradient, geom: GradientGeom) -> Document {

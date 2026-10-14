@@ -4,19 +4,19 @@
 
 use egui::{Align2, FontId, Id, Pos2, Sense, Stroke, vec2};
 use serde_json::{Value, json};
-use vectorcraft_doc::Unit;
-use vectorcraft_effects::{EXTRUDE, INFLATE, REVOLVE, ROTATION_PRESETS};
+use vectorz_doc::Unit;
+use vectorz_effects::{EXTRUDE, INFLATE, REVOLVE, ROTATION_PRESETS};
 
 use crate::state::Dialog;
 use crate::theme::Tokens;
-use crate::{VectorcraftApp, scrub, widgets};
+use crate::{VectorzApp, scrub, widgets};
 
 const LABEL_W: f32 = 102.0;
 const VALUE_W: f32 = 74.0;
 const SIDE_W: f32 = 354.0;
 
 /// Sized to the screen, with scrolling inside the body so OK and Cancel stay reachable.
-pub(super) fn body(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn body(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Values start in drag mode; clicking or Tab enters their text editor.
     ui.data_mut(|m| m.remove::<bool>(widgets::dialog_focus_flag()));
     let screen = ui.ctx().content_rect();
@@ -35,7 +35,7 @@ pub(super) fn body(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let id = d.str("__effect");
-            let defaults = vectorcraft_effects::default_params(&id).unwrap_or(json!({}));
+            let defaults = vectorz_effects::default_params(&id).unwrap_or(json!({}));
             let changed = defaults.as_object().is_some_and(|m| {
                 m.iter().any(|(k, v)| v.as_f64().map_or_else(|| d.fields.get(k) != Some(v), |default| (d.f64(k, default) - default).abs() > 1e-6))
             });
@@ -58,7 +58,7 @@ pub(super) fn body(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
 }
 
-fn controls(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
+fn controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.spacing_mut().item_spacing.y = 4.0;
     let id = d.str("__effect");
     if id != REVOLVE {
@@ -126,7 +126,7 @@ fn c3(s: &'static str) -> &'static str {
 
 /// Extrude & Bevel and Inflate: Object, Rotation and Lighting tabs (Rotate has no Object tab).
 /// The rotation gizmo shows on the first two, the light gizmo on Lighting.
-fn solid_controls(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog, id: &str) {
+fn solid_controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, id: &str) {
     let object = id == EXTRUDE || id == INFLATE;
     let mut tabs = vec![];
     if object {
@@ -237,7 +237,7 @@ fn view_controls(ui: &mut egui::Ui, d: &mut Dialog) {
 /// A dropdown of `options` (value, label) for `key`, with its reset dot.
 fn choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, options: &[(Value, &str)]) {
     let id = d.str("__effect");
-    let default = vectorcraft_effects::default_params(&id).and_then(|p| p.get(key).cloned()).unwrap_or(Value::Null);
+    let default = vectorz_effects::default_params(&id).and_then(|p| p.get(key).cloned()).unwrap_or(Value::Null);
     let value = d.fields.get(key).cloned().unwrap_or_else(|| default.clone());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -312,7 +312,7 @@ fn rail_width(ui: &egui::Ui) -> f32 {
 /// A value can be typed, dragged, scrubbed by its label, or moved on its slider.
 #[allow(clippy::too_many_arguments)]
 fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64, f64), suffix: &str, decimals: usize, unit: Option<Unit>) {
-    let default = vectorcraft_effects::default_params(&d.str("__effect")).and_then(|p| p.get(key).and_then(Value::as_f64)).unwrap_or(0.0);
+    let default = vectorz_effects::default_params(&d.str("__effect")).and_then(|p| p.get(key).and_then(Value::as_f64)).unwrap_or(0.0);
     let from = |n| unit.map_or(n, |u| u.from_pt(n));
     let to = |n| unit.map_or(n, |u| u.to_pt(n));
     let typed = unit.map(|u| widgets::typed_unit(ui.ctx(), u));
@@ -337,7 +337,7 @@ fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64,
                         .update_while_editing(false)
                         .custom_parser(|s| {
                             unit.map_or_else(
-                                || vectorcraft_doc::parse_number(&s.replace(['°', '%'], "")),
+                                || vectorz_doc::parse_number(&s.replace(['°', '%'], "")),
                                 |u| typed.unwrap_or(u).parse(s).map(|v| u.from_pt(v)),
                             )
                         }),

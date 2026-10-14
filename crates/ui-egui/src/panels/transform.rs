@@ -5,15 +5,15 @@
 
 use egui::Ui;
 use serde_json::json;
-use vectorcraft_doc::{LiveShape, Node, NodeKind};
-use vectorcraft_geom::Rect;
-use vectorcraft_geom::shapes::CornerKind;
+use vectorz_doc::{LiveShape, Node, NodeKind};
+use vectorz_geom::Rect;
+use vectorz_geom::shapes::CornerKind;
 
 use super::{corner_radius_row, first_selected, pstate, set_pstate};
 use crate::dialogs::corners::kind_label as corner_kind;
 use crate::theme::Tokens;
 use crate::widgets::{self, menu_item};
-use crate::{VectorcraftApp, icons};
+use crate::{VectorzApp, icons};
 
 pub const ANGLE_PRESETS: [f64; 9] = [-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0];
 /// The shear angle's presets: steep enough to be useful, short of the degenerate ±90°.
@@ -29,7 +29,7 @@ pub fn constrained(w: f64, h: f64, new_w: Option<f64>, new_h: Option<f64>) -> (f
 }
 
 /// The artboard the Artboard tool has active, while that tool is in use.
-fn tool_artboard(app: &VectorcraftApp) -> Option<(usize, Rect)> {
+fn tool_artboard(app: &VectorzApp) -> Option<(usize, Rect)> {
     if app.session.tool_id() != "artboard" {
         return None;
     }
@@ -40,7 +40,7 @@ fn tool_artboard(app: &VectorcraftApp) -> Option<(usize, Rect)> {
 /// Where an artboard goes when the panel sets its X, Y, W or H: the reference point `refi` moves to
 /// the new X/Y or stays put while the size changes (both sides together when `link` is on).
 pub fn artboard_rect(r: Rect, refi: usize, x: Option<f64>, y: Option<f64>, w: Option<f64>, h: Option<f64>, link: bool) -> Rect {
-    let rp = vectorcraft_geom::reference_point(r, refi);
+    let rp = vectorz_geom::reference_point(r, refi);
     let (w0, h0) = (r.width(), r.height());
     let (nw, nh) = if link { constrained(w0, h0, w, h) } else { (w.unwrap_or(w0), h.unwrap_or(h0)) };
     // Where the reference point sits across the box (0, ½ or 1 of each side).
@@ -51,13 +51,13 @@ pub fn artboard_rect(r: Rect, refi: usize, x: Option<f64>, y: Option<f64>, w: Op
 }
 
 /// The Artboard tool's view of the panel: the active artboard's position and size.
-fn artboard_fields(app: &mut VectorcraftApp, ui: &mut Ui, index: usize, r: Rect) {
+fn artboard_fields(app: &mut VectorzApp, ui: &mut Ui, index: usize, r: Rect) {
     let units = app.session.general_unit();
     let origin = app.ruler_origin();
     let refi: usize = ui.data(|d| d.get_temp(egui::Id::new("refpt"))).unwrap_or(4);
     let link = app.session.prefs.constrain_proportions;
-    let rp = vectorcraft_geom::reference_point(r, refi);
-    let set = |app: &mut VectorcraftApp, x, y, w, h| {
+    let rp = vectorz_geom::reference_point(r, refi);
+    let set = |app: &mut VectorzApp, x, y, w, h| {
         let n = artboard_rect(r, refi, x, y, w, h, link);
         let scale_art = crate::panels::artboards::scale_art(app);
         let move_art = crate::panels::artboards::move_art(app);
@@ -97,7 +97,7 @@ fn artboard_fields(app: &mut VectorcraftApp, ui: &mut Ui, index: usize, r: Rect)
 
 /// With ruler guides selected and no art: the X of the vertical ones and the Y of the horizontal
 /// ones (the least of each; none where no such guide is selected).
-fn selected_guides(app: &VectorcraftApp) -> Option<(Option<f64>, Option<f64>)> {
+fn selected_guides(app: &VectorzApp) -> Option<(Option<f64>, Option<f64>)> {
     let st = app.session.active()?;
     if !st.selection.objects.is_empty() || st.selection.guides.is_empty() {
         return None;
@@ -110,7 +110,7 @@ fn selected_guides(app: &VectorcraftApp) -> Option<(Option<f64>, Option<f64>)> {
 
 /// The selected ruler guides' view of the panel (#1597): X moves the vertical ones and Y the
 /// horizontal ones, together.
-fn guide_fields(app: &mut VectorcraftApp, ui: &mut Ui, (x, y): (Option<f64>, Option<f64>)) {
+fn guide_fields(app: &mut VectorzApp, ui: &mut Ui, (x, y): (Option<f64>, Option<f64>)) {
     let units = app.session.general_unit();
     let origin = app.ruler_origin();
     egui::Grid::new("xfp-guide-grid").num_columns(2).spacing([4.0, 6.0]).min_col_width(0.0).show(ui, |ui| {
@@ -128,7 +128,7 @@ fn guide_fields(app: &mut VectorcraftApp, ui: &mut Ui, (x, y): (Option<f64>, Opt
     });
 }
 
-pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn show(app: &mut VectorzApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     if app.session.active().is_none() {
         widgets::dim_label(ui, tl!("No document"));
@@ -219,19 +219,19 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     // Live shape properties (a path with live corners is no shape).
     if let Some(n) = first_selected(app)
         && let NodeKind::Path { live: Some(live), .. } = &n.kind
-        && !matches!(**live, vectorcraft_doc::LiveShape::Path { .. })
+        && !matches!(**live, vectorz_doc::LiveShape::Path { .. })
     {
         widgets::divider(ui);
         match &**live {
-            vectorcraft_doc::LiveShape::Rectangle { .. } => {
+            vectorz_doc::LiveShape::Rectangle { .. } => {
                 widgets::subheader(ui, tl!("Rectangle Properties:"));
                 corner_radius_row(app, ui, &n, "xfp-radius");
             }
-            vectorcraft_doc::LiveShape::Polygon { .. } => {
+            vectorz_doc::LiveShape::Polygon { .. } => {
                 widgets::subheader(ui, tl!("Polygon Properties:"));
                 polygon_rows(app, ui, &n, live, "xfp-polygon");
             }
-            vectorcraft_doc::LiveShape::Ellipse { pie, .. } => {
+            vectorz_doc::LiveShape::Ellipse { pie, .. } => {
                 widgets::subheader(ui, tl!("Ellipse Properties:"));
                 pie_rows(app, ui, *pie, "xfp-pie");
             }
@@ -256,7 +256,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
 
 /// An ellipse's Pie Start and End Angle (degrees, counterclockwise from 3 o'clock; 0 to 360 is the
 /// whole ellipse) and Invert Pie, which shows the other part of it (Transform and Properties panels).
-pub(crate) fn pie_rows(app: &mut VectorcraftApp, ui: &mut Ui, pie: (f64, f64), id: &str) {
+pub(crate) fn pie_rows(app: &mut VectorzApp, ui: &mut Ui, pie: (f64, f64), id: &str) {
     for (label, key, v) in [(tl!("Pie Start Angle:"), "pieStart", pie.0), (tl!("Pie End Angle:"), "pieEnd", pie.1)] {
         ui.horizontal(|ui| {
             widgets::dim_label(ui, label);
@@ -273,7 +273,7 @@ pub(crate) fn pie_rows(app: &mut VectorcraftApp, ui: &mut Ui, pie: (f64, f64), i
 /// A live polygon's Polygon Properties (Transform and Properties panels): its side count, angle
 /// (counterclockwise), corner type and radius, radius (centre to vertex) and side length, and Make
 /// Sides Equal, which an uneven scale enables.
-pub(crate) fn polygon_rows(app: &mut VectorcraftApp, ui: &mut Ui, n: &Node, live: &LiveShape, id: &str) {
+pub(crate) fn polygon_rows(app: &mut VectorzApp, ui: &mut Ui, n: &Node, live: &LiveShape, id: &str) {
     let LiveShape::Polygon { sides, .. } = live else { return };
     let (units, fw) = (app.session.general_unit(), super::field_width(ui));
     let radius = live.polygon_radius();
@@ -322,7 +322,7 @@ pub(crate) fn polygon_rows(app: &mut VectorcraftApp, ui: &mut Ui, n: &Node, live
 
 /// The Control bar's underlined "Transform" link: a click toggles the Transform panel in a
 /// popover under it, as the Stroke link does with the Stroke panel.
-pub fn link(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn link(app: &mut VectorzApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let resp = ui.link(egui::RichText::new(tl!("Transform")).size(12.0).color(t.text).underline()).on_hover_text(tl!("Transform options"));
     widgets::popover(&resp, resp.clicked(), |ui| {
@@ -333,7 +333,7 @@ pub fn link(app: &mut VectorcraftApp, ui: &mut Ui) {
 
 /// The link between W and H (Transform panel, Properties panel, Control bar): one toggle, the
 /// `constrainProportions` preference, which the size fields pass on as `proportional`.
-pub fn constrain_link(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn constrain_link(app: &mut VectorzApp, ui: &mut Ui) {
     let on = app.session.prefs.constrain_proportions;
     if widgets::icon_button(ui, if on { "link" } else { "link-2-off" }, tl!("Constrain Width and Height Proportions"), on, 22.0).clicked() {
         set_pref(app, "constrainProportions", !on);
@@ -341,13 +341,13 @@ pub fn constrain_link(app: &mut VectorcraftApp, ui: &mut Ui) {
 }
 
 /// Toggle a boolean preference (through `prefs.set`, as agents do).
-pub fn set_pref(app: &mut VectorcraftApp, key: &str, on: bool) {
+pub fn set_pref(app: &mut VectorzApp, key: &str, on: bool) {
     if let Err(e) = app.run("prefs.set", json!({ "key": key, "value": on })) {
         app.status(e);
     }
 }
 
-pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn menu(app: &mut VectorzApp, ui: &mut Ui) {
     let hidden: bool = pstate(ui.ctx(), "xf-hide-options");
     let has = super::selection_len(app) > 0;
     if menu_item(ui, if hidden { tl!("Show Options") } else { tl!("Hide Options") }, true, false) {
@@ -378,7 +378,7 @@ mod tests {
     use super::*;
 
     /// One headless frame of the panel (or the Align panel's menu): the texts drawn.
-    fn texts(app: &mut VectorcraftApp, draw: fn(&mut VectorcraftApp, &mut Ui)) -> Vec<String> {
+    fn texts(app: &mut VectorzApp, draw: fn(&mut VectorzApp, &mut Ui)) -> Vec<String> {
         fn walk(s: &egui::Shape, out: &mut Vec<String>) {
             match s {
                 egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn use_preview_bounds_shows_the_visual_size_and_checks_the_align_flyout() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 50})).unwrap();
         app.run("stroke.set", json!({"weight": 10})).unwrap();
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn rotation_field_shows_the_angle_the_box_keeps() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 50})).unwrap();
         app.run("object.rotate", json!({"angle": 45, "absolute": true})).unwrap();
@@ -428,10 +428,10 @@ mod tests {
     /// Properties panel's Transform section, and Make Sides Equal evens it out after a stretch.
     #[test]
     fn a_polygon_shows_its_polygon_properties() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.polygon", json!({"cx": 150, "cy": 150, "radius": 50, "sides": 6})).unwrap();
-        for draw in [show as fn(&mut VectorcraftApp, &mut Ui), crate::panels::properties::transform_section] {
+        for draw in [show as fn(&mut VectorzApp, &mut Ui), crate::panels::properties::transform_section] {
             let shown = texts(&mut app, draw);
             // A hexagon's side is as long as its radius.
             for t in ["Sides:", "6", "Angle:", "0°", "Corner:", "Round", "Corner Radius:", "Radius:", "Side Length:", "50 pt", "Make Sides Equal"] {
@@ -440,7 +440,7 @@ mod tests {
         }
         assert!(texts(&mut app, show).iter().any(|s| s == "Polygon Properties:"));
         app.run("object.scale", json!({"sx": 200, "sy": 100})).unwrap();
-        let live = |app: &VectorcraftApp| match &first_selected(app).unwrap().kind {
+        let live = |app: &VectorzApp| match &first_selected(app).unwrap().kind {
             NodeKind::Path { live: Some(l), .. } => l.clone(),
             k => panic!("{k:?}"),
         };
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn the_artboard_tool_shows_the_active_artboard() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
         app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 30})).unwrap();
         assert!(texts(&mut app, show).iter().any(|t| t == "40 pt"), "the selection first");
@@ -467,7 +467,7 @@ mod tests {
     /// #1597: with only ruler guides selected the panel shows their X or Y, and nothing of the art.
     #[test]
     fn selected_guides_show_their_position() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
         app.run("guide.add", json!({"vertical": true, "pos": 120})).unwrap();
         app.run("guide.add", json!({"vertical": false, "pos": 45})).unwrap();
@@ -490,7 +490,7 @@ mod tests {
     /// and a new X moves it alone.
     #[test]
     fn an_anchor_selection_shows_and_moves_its_own_box() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         let square = json!({"anchors": [{"x": 20, "y": 30}, {"x": 120, "y": 30}, {"x": 120, "y": 130}, {"x": 20, "y": 130}], "closed": true});
         let id = app.run("path.create", square).unwrap()["id"].as_u64().unwrap();

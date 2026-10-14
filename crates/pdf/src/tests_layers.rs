@@ -4,9 +4,9 @@
 
 use hayro_syntax::object::{Array, Dict, Name, ObjectIdentifier};
 use serde_json::{Value, json};
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{Appearance, CharStyle, Document, LayerColor, Node, NodeKind, TextObject};
-use vectorcraft_geom::{Point, Rect, shapes};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{Appearance, CharStyle, Document, LayerColor, Node, NodeKind, TextObject};
+use vectorz_geom::{Point, Rect, shapes};
 
 use crate::*;
 

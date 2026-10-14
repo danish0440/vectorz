@@ -2,10 +2,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use serde_json::json;
-use vectorcraft_doc::{Node, NodeId, NodeKind};
-use vectorcraft_engine::{Session, ViewInfo};
-use vectorcraft_geom::{AnchorKind, Point};
-use vectorcraft_tools::{Cursor, Mods, PointerEvent, PointerKind};
+use vectorz_doc::{Node, NodeId, NodeKind};
+use vectorz_engine::{Session, ViewInfo};
+use vectorz_geom::{AnchorKind, Point};
+use vectorz_tools::{Cursor, Mods, PointerEvent, PointerKind};
 
 fn session() -> Session {
     let mut s = Session::new();

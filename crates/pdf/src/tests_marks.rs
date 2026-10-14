@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use vectorcraft_color::{Color, Paint, Swatch};
-use vectorcraft_doc::marks::PrinterMarks;
-use vectorcraft_doc::{Appearance, Document, LayerColor, Node, NodeKind};
-use vectorcraft_geom::{Rect, shapes};
+use vectorz_color::{Color, Paint, Swatch};
+use vectorz_doc::marks::PrinterMarks;
+use vectorz_doc::{Appearance, Document, LayerColor, Node, NodeKind};
+use vectorz_geom::{Rect, shapes};
 
 use crate::*;
 

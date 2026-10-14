@@ -10,13 +10,13 @@
 use egui::{CornerRadius, Rect, Sense, Ui, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use vectorcraft_engine::cmd::swatchlib::LibraryInfo;
+use vectorz_engine::cmd::swatchlib::LibraryInfo;
 
 use super::swatches::{View, click_selection, folder_tile, list_row, list_row_name, tile_grid};
 use super::{pstate, set_pstate};
 use crate::theme::{self, Tokens};
 use crate::widgets::{self, menu_item};
-use crate::{VectorcraftApp, icons};
+use crate::{VectorzApp, icons};
 
 /// The library open in the library panel.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,25 +57,25 @@ pub(crate) trait LibraryKind {
     type Lib;
     type Item;
     /// Every library, in menu order.
-    fn list(app: &VectorcraftApp) -> Vec<LibraryRef>;
+    fn list(app: &VectorzApp) -> Vec<LibraryRef>;
     /// Library `id`: its name and contents.
-    fn get(app: &VectorcraftApp, id: &str) -> Option<(String, Self::Lib)>;
+    fn get(app: &VectorzApp, id: &str) -> Option<(String, Self::Lib)>;
     /// The rows matching the find field's `query` (lower case; empty: all).
     fn rows<'a>(lib: &'a Self::Lib, query: &str) -> Vec<Row<'a, Self::Item>>;
     /// An item's thumbnail in `r`.
-    fn draw(app: &VectorcraftApp, ui: &Ui, r: Rect, item: &Self::Item, selected: bool, hovered: bool);
+    fn draw(app: &VectorzApp, ui: &Ui, r: Rect, item: &Self::Item, selected: bool, hovered: bool);
     /// The icons at the right of list row `r`.
     fn row_icons(ui: &Ui, r: Rect, item: &Self::Item);
     /// An item described in words, for list tooltips.
     fn describe(item: &Self::Item) -> String;
     /// A plain click on item `name` of library `id`: add it to the document and apply it.
-    fn click(app: &mut VectorcraftApp, ui: &Ui, id: &str, name: &str);
+    fn click(app: &mut VectorzApp, ui: &Ui, id: &str, name: &str);
     /// Add the items and folders `names` of library `id` to the document.
-    fn add(app: &mut VectorcraftApp, id: &str, names: Vec<String>);
+    fn add(app: &mut VectorzApp, id: &str, names: Vec<String>);
     /// Items heading the libraries menu.
-    fn menu_head(_app: &mut VectorcraftApp, _ui: &mut Ui) {}
+    fn menu_head(_app: &mut VectorzApp, _ui: &mut Ui) {}
     /// Items closing the libraries menu.
-    fn menu_tail(_app: &mut VectorcraftApp, _ui: &mut Ui) {}
+    fn menu_tail(_app: &mut VectorzApp, _ui: &mut Ui) {}
 }
 
 /// The state key `key` of `K`'s panel.
@@ -94,7 +94,7 @@ pub(crate) fn tile_id<K: LibraryKind>(name: &str) -> egui::Id {
 }
 
 /// Draw the open library panel, if any.
-pub fn show_window(app: &mut VectorcraftApp, ctx: &egui::Context) {
+pub fn show_window(app: &mut VectorzApp, ctx: &egui::Context) {
     let Some(open) = app.ui.library_panel.clone() else { return };
     match open.kind.as_str() {
         super::swatches::SwatchLibraries::KIND => window::<super::swatches::SwatchLibraries>(app, ctx, &open.id),
@@ -128,10 +128,10 @@ pub(crate) fn library_name<'a>(id: &str, name: &'a str) -> &'a str {
 /// (an id or a name; `list`: the command listing them) in the panel, `null` closing it. `found`
 /// looks a library up: its id, name and item count. → {open, name, count}
 pub(crate) fn open_command<K: LibraryKind>(
-    app: &mut VectorcraftApp,
+    app: &mut VectorzApp,
     p: &Value,
     list: &str,
-    found: impl FnOnce(&VectorcraftApp, &str) -> Option<(String, String, usize)>,
+    found: impl FnOnce(&VectorzApp, &str) -> Option<(String, String, usize)>,
 ) -> Result<Value, String> {
     let Some(key) = p.get("library").filter(|v| !v.is_null()) else {
         app.ui.library_panel = None;
@@ -145,7 +145,7 @@ pub(crate) fn open_command<K: LibraryKind>(
 
 /// Other Library…: the library file at `path`, else one picked in an open dialog; `None` when the
 /// pick is asynchronous (on the web the picked file arrives later through [`crate::io::open_bytes`]).
-pub(crate) fn pick_library_file(app: &mut VectorcraftApp, path: Option<String>) -> Result<Option<String>, String> {
+pub(crate) fn pick_library_file(app: &mut VectorzApp, path: Option<String>) -> Result<Option<String>, String> {
     if path.is_none()
         && let Some(f) = app.services.open_async.as_mut()
     {
@@ -153,7 +153,7 @@ pub(crate) fn pick_library_file(app: &mut VectorcraftApp, path: Option<String>) 
         return Ok(None);
     }
     path.or_else(|| {
-        let pick = crate::FilePick { filters: vectorcraft_engine::cmd::fileio::open_filters().collect(), ..Default::default() };
+        let pick = crate::FilePick { filters: vectorz_engine::cmd::fileio::open_filters().collect(), ..Default::default() };
         crate::picks::open(app, &pick)
     })
     .map(Some)
@@ -169,7 +169,7 @@ pub(crate) fn user_slot(id: &str, prefix: &str, libraries: Vec<LibraryInfo>) -> 
 
 /// The panel's window: a tab strip with the library's name, the panel menu and a close button, then
 /// the body. A library that no longer exists closes it.
-fn window<K: LibraryKind>(app: &mut VectorcraftApp, ctx: &egui::Context, id: &str) {
+fn window<K: LibraryKind>(app: &mut VectorzApp, ctx: &egui::Context, id: &str) {
     let Some((name, lib)) = K::get(app, id) else {
         app.ui.library_panel = None;
         return;
@@ -224,7 +224,7 @@ fn set_selection<K: LibraryKind>(ctx: &egui::Context, id: &str, sel: Vec<String>
 }
 
 /// Find field, thumbnails or list rows, and the bottom bar.
-fn body<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui, id: &str, lib: &K::Lib) {
+fn body<K: LibraryKind>(app: &mut VectorzApp, ui: &mut Ui, id: &str, lib: &K::Lib) {
     let view = view::<K>(ui.ctx());
     let query = if pstate::<bool>(ui.ctx(), &key::<K>("hide-find")) {
         String::new()
@@ -287,7 +287,7 @@ fn body<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui, id: &str, lib: &K
 }
 
 /// The library `step` places after (or before, when negative) `id` in menu order, wrapping.
-fn neighbour<K: LibraryKind>(app: &VectorcraftApp, id: &str, step: isize) -> Option<String> {
+fn neighbour<K: LibraryKind>(app: &VectorzApp, id: &str, step: isize) -> Option<String> {
     let all = K::list(app);
     let i = all.iter().position(|l| l.id == id)? as isize;
     let n = all.len() as isize;
@@ -295,14 +295,14 @@ fn neighbour<K: LibraryKind>(app: &VectorcraftApp, id: &str, step: isize) -> Opt
 }
 
 /// Open library `id` in the panel.
-fn open<K: LibraryKind>(app: &mut VectorcraftApp, id: &str) {
+fn open<K: LibraryKind>(app: &mut VectorzApp, id: &str) {
     if let Err(e) = app.run(K::OPEN, json!({ "library": id })) {
         app.status(e);
     }
 }
 
 /// Libraries menu, previous / next library, and Add to … for the selection.
-fn bottom<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
+fn bottom<K: LibraryKind>(app: &mut VectorzApp, ui: &mut Ui, id: &str) {
     let selected = selection::<K>(ui.ctx(), id);
     widgets::bottom_bar(ui, |ui| {
         let r = widgets::icon_button(ui, "library", K::MENU, false, 24.0);
@@ -325,7 +325,7 @@ fn bottom<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
 }
 
 /// The library panel's (≡) menu.
-fn panel_menu<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
+fn panel_menu<K: LibraryKind>(app: &mut VectorzApp, ui: &mut Ui, id: &str) {
     let selected = selection::<K>(ui.ctx(), id);
     if menu_item(ui, K::ADD, !selected.is_empty(), false) {
         K::add(app, id, selected);
@@ -357,7 +357,7 @@ fn panel_menu<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
 
 /// The libraries menu (the panel's library button, the Swatches panel's): every library by
 /// submenu, the open one checked, between `K`'s head and tail items.
-pub(crate) fn library_menu<K: LibraryKind>(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub(crate) fn library_menu<K: LibraryKind>(app: &mut VectorzApp, ui: &mut Ui) {
     K::menu_head(app, ui);
     let current = app.ui.library_panel.as_ref().filter(|o| o.kind == K::KIND).map(|o| o.id.clone());
     if let Some(id) = library_items(ui, &K::list(app), current.as_deref()) {
@@ -400,14 +400,14 @@ pub(crate) fn library_items(ui: &mut Ui, libs: &[LibraryRef], current: Option<&s
 mod tests {
     use egui::{Event, Modifiers, PointerButton, Pos2};
     use serde_json::Value;
-    use vectorcraft_color::Paint;
-    use vectorcraft_engine::Session;
+    use vectorz_color::Paint;
+    use vectorz_engine::Session;
 
     use super::*;
     use crate::panels::swatches::SwatchLibraries;
 
-    fn app() -> VectorcraftApp {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    fn app() -> VectorzApp {
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         app
     }
@@ -419,7 +419,7 @@ mod tests {
     }
 
     /// One frame of the library panel with `events` and `modifiers` held.
-    fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<Event>, modifiers: Modifiers, time: f64) {
+    fn frame(app: &mut VectorzApp, ctx: &egui::Context, events: Vec<Event>, modifiers: Modifiers, time: f64) {
         let screen_rect = Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0)));
         let events = std::iter::once(Event::ModifiersChanged(modifiers)).chain(events).collect();
         let input = egui::RawInput { events, time: Some(time), screen_rect, ..Default::default() };
@@ -429,7 +429,7 @@ mod tests {
 
     /// Click the tile or row of `name` with `modifiers` (frames from `time` to `time + 0.5`; a new
     /// window takes a sizing frame first).
-    fn click(app: &mut VectorcraftApp, ctx: &egui::Context, name: &str, modifiers: Modifiers, time: f64) {
+    fn click(app: &mut VectorzApp, ctx: &egui::Context, name: &str, modifiers: Modifiers, time: f64) {
         frame(app, ctx, vec![], Modifiers::NONE, time);
         frame(app, ctx, vec![], Modifiers::NONE, time + 0.25);
         let at = ctx.read_response(tile_id::<SwatchLibraries>(name)).unwrap_or_else(|| panic!("no tile for {name}")).rect.center();
@@ -437,7 +437,7 @@ mod tests {
         frame(app, ctx, vec![Event::PointerMoved(at), button(true), button(false)], modifiers, time + 0.5);
     }
 
-    fn undo_len(app: &VectorcraftApp) -> usize {
+    fn undo_len(app: &VectorzApp) -> usize {
         app.session.doc().unwrap().history.undo.len()
     }
 
@@ -523,7 +523,7 @@ mod tests {
             .filter(|e| e.path == ["Window", "Swatch Libraries"] && e.command.as_deref() == Some("window.swatchLibrary"))
             .map(|e| e.params["library"].clone())
             .collect();
-        let all = vectorcraft_engine::cmd::swatchlib::libraries(&app.session);
+        let all = vectorz_engine::cmd::swatchlib::libraries(&app.session);
         let listed = |category: &str| all.iter().filter(|l| l.category == category).map(|l| json!(l.id)).collect::<Vec<_>>();
         assert_eq!(ids, listed("builtIn"));
         assert_eq!(ids, SWATCH_IDS.map(|i| json!(i)));
@@ -544,7 +544,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut app = app();
         app.session.swatch_libraries.set_user_dir(Some(dir.to_string_lossy().to_string()));
-        let user_items = |app: &VectorcraftApp| -> Vec<(String, String)> {
+        let user_items = |app: &VectorzApp| -> Vec<(String, String)> {
             crate::menus::menu_entries(app)
                 .into_iter()
                 .filter(|e| e.path == ["Window", "Swatch Libraries", "User Defined"])
@@ -583,7 +583,7 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut app = VectorcraftApp::new(Session::new(), services);
+        let mut app = VectorzApp::new(Session::new(), services);
         app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
         app.run("ui.saveSwatchLibrary", json!({})).unwrap();
         let d = app.ui.dialog.as_mut().unwrap();
@@ -614,7 +614,7 @@ mod tests {
         for l in SwatchLibraries::list(&app) {
             assert_eq!(builtin_library(&l.id), !matches!(l.submenu, Some("User Defined" | "Other Libraries")), "{}", l.id);
         }
-        assert!(!builtin_library(&open.id) && builtin_library(vectorcraft_engine::cmd::swatchlib::DOCUMENT_SWATCHES));
+        assert!(!builtin_library(&open.id) && builtin_library(vectorz_engine::cmd::swatchlib::DOCUMENT_SWATCHES));
     }
 
     #[test]
@@ -629,7 +629,7 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut app = VectorcraftApp::new(Session::new(), services);
+        let mut app = VectorzApp::new(Session::new(), services);
         app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
         app.run("ui.saveSwatchLibrary", json!({})).unwrap();
         let d = app.ui.dialog.as_mut().unwrap();
@@ -640,7 +640,7 @@ mod tests {
         crate::dialogs::confirm(&mut app).unwrap();
         let (path, bytes) = written.borrow()[0].clone();
         assert_eq!(path, "/tmp/Brand Kit.ase", "the save panel suggests the name");
-        let lib = vectorcraft_color::palette_io::read_bytes(&bytes, "x").unwrap();
+        let lib = vectorz_color::palette_io::read_bytes(&bytes, "x").unwrap();
         let solid = app.session.doc().unwrap().doc.swatches_iter().filter(|w| w.paint.color().is_some()).count();
         assert_eq!(lib.len(), solid, "every solid color of the document");
         // The web downloads the file under that name.
@@ -653,7 +653,7 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut web = VectorcraftApp::new(Session::new(), services);
+        let mut web = VectorzApp::new(Session::new(), services);
         web.run("file.new", json!({"width": 100, "height": 100})).unwrap();
         web.run("ui.saveSwatchLibrary", json!({})).unwrap();
         let d = web.ui.dialog.as_mut().unwrap();
@@ -667,7 +667,7 @@ mod tests {
     fn swatch_exchange_files_without_a_path_open_in_the_library_panel() {
         // A file opened on the web has no path; open_bytes passes its bytes as dataBase64.
         let mut app = app();
-        crate::io::open_bytes(&mut app, "Brand.ase", &vectorcraft_testkit::ase::sample(), None).unwrap();
+        crate::io::open_bytes(&mut app, "Brand.ase", &vectorz_testkit::ase::sample(), None).unwrap();
         let open = app.ui.library_panel.clone().unwrap();
         assert_eq!(open.id, "loaded/Brand.ase");
         let (_, lib) = SwatchLibraries::get(&app, &open.id).unwrap();

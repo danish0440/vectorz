@@ -1,9 +1,9 @@
 //! Convert to Shape, Round Corners and Scribble.
 
 use serde_json::Value;
-use vectorcraft_geom::kurbo;
-use vectorcraft_geom::shapes::{self, KAPPA};
-use vectorcraft_geom::{Affine, Anchor, PathData, Point, Rect, SubPath};
+use vectorz_geom::kurbo;
+use vectorz_geom::shapes::{self, KAPPA};
+use vectorz_geom::{Affine, Anchor, PathData, Point, Rect, SubPath};
 
 use crate::util::*;
 

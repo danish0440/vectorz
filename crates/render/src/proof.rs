@@ -10,7 +10,7 @@
 //!   Registration swatch print their tint on every plate, spot plates included.
 //!   Placed raster images are not separated (limitation).
 //! * **Overprint Preview** (and Separations Preview, which implies it): fills and strokes that
-//!   overprint ([`vectorcraft_doc::FillLayer::overprint`], characters' too) are drawn with
+//!   overprint ([`vectorz_doc::FillLayer::overprint`], characters' too) are drawn with
 //!   Multiply, which approximates their inks printing over the inks below: a zero ink lets the
 //!   inks below show through, where a knockout would replace them.
 //!
@@ -20,12 +20,12 @@
 use std::borrow::Cow;
 use std::sync::RwLock;
 
-use vectorcraft_color::Color;
-use vectorcraft_color::cms::{self, Cms, PROCESS_PLATES};
-pub use vectorcraft_color::cms::{Intent, ProofSetup, ProofTarget};
-use vectorcraft_doc::Document;
-pub use vectorcraft_doc::inks::{Inks, Link, Plate, inks, map_document_colors, map_node_colors, plates, spot_color};
-use vectorcraft_doc::overprint::multiply_overprints;
+use vectorz_color::Color;
+use vectorz_color::cms::{self, Cms, PROCESS_PLATES};
+pub use vectorz_color::cms::{Intent, ProofSetup, ProofTarget};
+use vectorz_doc::Document;
+pub use vectorz_doc::inks::{Inks, Link, Plate, inks, map_document_colors, map_node_colors, plates, spot_color};
+use vectorz_doc::overprint::multiply_overprints;
 
 use crate::RenderOptions;
 

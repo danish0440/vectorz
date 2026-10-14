@@ -2,10 +2,10 @@
 use super::*;
 use crate::{dialogs, theme};
 use egui::{Event, PointerButton, Rect, Vec2, pos2};
-use vectorcraft_engine::Session;
+use vectorz_engine::Session;
 
 struct Harness {
-    app: VectorcraftApp,
+    app: VectorzApp,
     ctx: egui::Context,
     screen: Vec2,
     texts: Vec<(String, Rect)>,
@@ -18,7 +18,7 @@ impl Harness {
 
     /// The dialog of 3D effect `effect` on a path drawn from SVG path data `d`.
     fn with(d: &str, effect: &str, screen: Vec2) -> Self {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width":300,"height":300})).unwrap();
         app.run("path.create", json!({"d": d})).unwrap();
         app.run("paint.setFill", json!({"color":"#338ad6"})).unwrap();
@@ -107,7 +107,7 @@ fn values_labels_sliders_and_reset_dots_change_the_live_effect_in_one_undo_step(
     let node = h.app.session.doc().unwrap().doc.node(h.app.session.doc().unwrap().selection.objects[0]).unwrap();
     assert_eq!(node.appearance.effects[0].params["angle"], json!(h.value("angle")));
     h.click(h.response("revolve-reset-all").center());
-    let defaults = vectorcraft_effects::default_params(REVOLVE).unwrap();
+    let defaults = vectorz_effects::default_params(REVOLVE).unwrap();
     let dialog = h.app.ui.dialog.as_ref().unwrap();
     for (key, value) in defaults.as_object().unwrap() {
         assert_eq!(dialog.fields.get(key), Some(value), "reset all: {key}");
@@ -182,7 +182,7 @@ fn advanced_visibility_option_is_saved_resettable_and_leaves_preview_geometry_co
         },
     ]);
     h.settle();
-    let before = vectorcraft_effects::revolve_art({
+    let before = vectorz_effects::revolve_art({
         let state = h.app.session.doc().unwrap();
         state.doc.node(state.selection.objects[0]).unwrap()
     })
@@ -193,7 +193,7 @@ fn advanced_visibility_option_is_saved_resettable_and_leaves_preview_geometry_co
     let state = h.app.session.doc().unwrap();
     let node = state.doc.node(state.selection.objects[0]).unwrap();
     assert_eq!(node.appearance.effects[0].params["expandVisibleOnly"], json!(false));
-    assert_eq!(vectorcraft_effects::revolve_art(node), Some(before));
+    assert_eq!(vectorz_effects::revolve_art(node), Some(before));
     h.click(h.response(("revolve-reset", "expandVisibleOnly")).center());
     assert!(h.app.ui.dialog.as_ref().unwrap().bool("expandVisibleOnly"));
     h.click(h.rect("Keep visible surfaces only when expanding").center());
@@ -201,7 +201,7 @@ fn advanced_visibility_option_is_saved_resettable_and_leaves_preview_geometry_co
     assert!(h.app.ui.dialog.as_ref().unwrap().bool("expandVisibleOnly"));
     dialogs::confirm(&mut h.app).unwrap();
     let state = h.app.session.doc().unwrap();
-    let loaded = vectorcraft_format::load(&vectorcraft_format::save(&state.doc, false)).unwrap();
+    let loaded = vectorz_format::load(&vectorz_format::save(&state.doc, false)).unwrap();
     assert_eq!(loaded.node(state.selection.objects[0]).unwrap().appearance.effects[0].params["expandVisibleOnly"], json!(true));
 }
 
@@ -209,7 +209,7 @@ fn advanced_visibility_option_is_saved_resettable_and_leaves_preview_geometry_co
 /// Position presets and the artboard gizmo turning about the centre of the art.
 #[test]
 fn the_other_3d_effects_show_their_options_and_position_presets() {
-    use vectorcraft_effects::{EXTRUDE, INFLATE, ROTATE, ROTATION_PRESETS};
+    use vectorz_effects::{EXTRUDE, INFLATE, ROTATE, ROTATION_PRESETS};
     let square = "M100 100 L200 100 L200 200 L100 200 Z";
     for (effect, own) in [
         (EXTRUDE, &["Depth", "Twist", "Taper", "Cap", "Bevel", "Bevel Shape", "Space", "Bevel Inside", "Bevel both sides"][..]),
@@ -248,7 +248,7 @@ fn the_other_3d_effects_show_their_options_and_position_presets() {
 
 #[test]
 fn extrude_bevel_options_enable_with_a_bevel_shape() {
-    let mut h = Harness::with("M100 100 L200 100 L200 200 L100 200 Z", vectorcraft_effects::EXTRUDE, vec2(1400.0, 1000.0));
+    let mut h = Harness::with("M100 100 L200 100 L200 200 L100 200 Z", vectorz_effects::EXTRUDE, vec2(1400.0, 1000.0));
     h.settle();
     let width = h.response(("revolve-reset", "bevelWidth"));
     assert!(!h.ctx.read_response(Id::new(("revolve-reset", "bevelWidth"))).unwrap().enabled(), "no bevel: its sizes are off");

@@ -1,8 +1,8 @@
 //! Puppet Warp: turning the art around a pin (`object.puppetWarp {angles}`) and the tool's pins.
 
 use serde_json::{Value, json};
-use vectorcraft_geom::{Point, Rect};
-use vectorcraft_tools::{Mods, PointerEvent, PointerKind};
+use vectorz_geom::{Point, Rect};
+use vectorz_tools::{Mods, PointerEvent, PointerKind};
 
 use super::*;
 
@@ -105,7 +105,7 @@ fn drag(s: &mut Session, from: (f64, f64), to: (f64, f64)) {
 }
 
 fn pin_overlays(s: &mut Session) -> usize {
-    s.overlays(ViewInfo::default()).iter().filter(|o| matches!(o, vectorcraft_tools::Overlay::Anchor { .. })).count()
+    s.overlays(ViewInfo::default()).iter().filter(|o| matches!(o, vectorz_tools::Overlay::Anchor { .. })).count()
 }
 
 #[test]
@@ -254,9 +254,9 @@ fn pins_are_never_saved() {
     s.select_tool("puppetWarp", ViewInfo::default()).unwrap();
     click(&mut s, 250.0, 150.0);
     assert!(s.doc().unwrap().doc.puppet.is_some());
-    let r = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap();
+    let r = s.execute("document.serialize", &json!({"format": "vectorz"})).unwrap();
     let data = r["dataBase64"].as_str().unwrap().to_string();
-    s.execute("document.open", &json!({"name": "pins.vectorcraft", "dataBase64": data})).unwrap();
+    s.execute("document.open", &json!({"name": "pins.vectorz", "dataBase64": data})).unwrap();
     let st = s.doc().unwrap();
     assert!(st.doc.puppet.is_none());
     assert_eq!(st.doc.node_count(), 2, "layer + rectangle");

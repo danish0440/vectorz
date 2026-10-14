@@ -1,19 +1,19 @@
 [package]
-name = "vectorcraft-metafile"
+name = "vectorz-metafile"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft Windows metafiles: hand-written EMF and WMF writers and readers"
+description = "VectorZ Windows metafiles: hand-written EMF and WMF writers and readers"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-color = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-effects = { workspace = true }
-vectorcraft-brush = { workspace = true }
-vectorcraft-text = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-color = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-effects = { workspace = true }
+vectorz-brush = { workspace = true }
+vectorz-text = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }

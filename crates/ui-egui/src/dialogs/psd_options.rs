@@ -3,8 +3,8 @@
 //! `psdOptions` dialog.
 
 use serde_json::{Map, Value, json};
-use vectorcraft_render::encode::jpeg::ColorModel;
-use vectorcraft_render::encode::psd::PsdOptions;
+use vectorz_render::encode::jpeg::ColorModel;
+use vectorz_render::encode::psd::PsdOptions;
 
 use super::form;
 use super::png_options::choice;

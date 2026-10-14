@@ -4,10 +4,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use serde_json::json;
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{Appearance, CharStyle, Document, Effect, Node, NodeId, NodeKind, TextObject};
-use vectorcraft_geom::{Point, Rect, shapes};
-use vectorcraft_svg::{ExportOptions, export};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{Appearance, CharStyle, Document, Effect, Node, NodeId, NodeKind, TextObject};
+use vectorz_geom::{Point, Rect, shapes};
+use vectorz_svg::{ExportOptions, export};
 
 fn doc_with(mut n: Node) -> Document {
     let mut d = Document::new(200.0, 200.0);
@@ -23,10 +23,10 @@ fn fx(id: &str) -> Effect {
 
 #[test]
 fn revolve_exports_shaded_vector_faces_and_keeps_the_source_live() {
-    let bp = vectorcraft_geom::BezPath::from_svg("M100 30 L130 50 L130 140 L100 160").unwrap();
+    let bp = vectorz_geom::BezPath::from_svg("M100 30 L130 50 L130 140 L100 160").unwrap();
     let mut n = Node::path(
         NodeId(0),
-        vectorcraft_geom::PathData::from_bezpath(&bp),
+        vectorz_geom::PathData::from_bezpath(&bp),
         Appearance::basic(Paint::solid(Color::rgb(0.8, 0.2, 0.1)), Paint::None, 0.0),
     );
     n.appearance.effects.push(fx("threeD.revolve"));

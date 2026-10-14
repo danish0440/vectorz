@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use usvg::{ImageHrefResolver, ImageKind, roxmltree};
-use vectorcraft_doc::LinkInfo;
+use vectorz_doc::LinkInfo;
 
 use super::{Edits, href};
 use crate::ImportOptions;
@@ -127,7 +127,7 @@ impl Files {
                 let (path, local) = target(h, opts.folder);
                 let read = if local { opts.read.and_then(|read| read(&path)) } else { None };
                 let source = match read {
-                    Some((bytes, link)) => files.source(bytes, link).ok_or("is not an image VectorCraft reads"),
+                    Some((bytes, link)) => files.source(bytes, link).ok_or("is not an image VectorZ reads"),
                     None => Err("not found"),
                 };
                 let source = source.or_else(|why| {

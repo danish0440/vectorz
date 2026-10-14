@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use super::{DialogSpec, form, run_and_close};
 use crate::state::Dialog;
 use crate::theme::Tokens;
-use crate::{VectorcraftApp, widgets};
+use crate::{VectorzApp, widgets};
 
 /// The dialog kind of Blend Options.
 pub const KIND: &str = "blendOptions";
@@ -31,7 +31,7 @@ pub(super) const SPEC: DialogSpec =
     DialogSpec { heading: |_| tl!("Blend Options").into(), body, confirm, preview: true, min_width: 300.0, ..DialogSpec::FORM };
 
 /// Open Blend Options on the selected blend's options (else those new blends start with).
-pub fn open(app: &mut VectorcraftApp) -> Result<Value, String> {
+pub fn open(app: &mut VectorzApp) -> Result<Value, String> {
     let mut fields = app.session.execute("object.blend.info", &json!({})).map_err(|e| e.to_string())?;
     let target = fields["target"].clone();
     let Some(o) = fields.as_object_mut() else { return Err("no blend options".into()) };
@@ -58,7 +58,7 @@ fn params(d: &Dialog) -> Value {
     p
 }
 
-fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let unit = app.session.general_unit();
     let mode = d.str("spacing");
     let shown = SPACING.iter().find(|(v, _)| *v == mode).map_or(SPACING[0].1, |(_, l)| l);
@@ -127,26 +127,26 @@ fn orientation_button(ui: &mut egui::Ui, along: bool, selected: bool, tip: &str)
     resp.on_hover_text(tip).clicked()
 }
 
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     if on_blend(d) { form::commit_preview(app, CMD, params(d)) } else { run_and_close(app, CMD, params(d)) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_doc::NodeKind;
-    use vectorcraft_doc::live::{BlendOrientation, BlendSpacing};
-    use vectorcraft_engine::Session;
+    use vectorz_doc::NodeKind;
+    use vectorz_doc::live::{BlendOrientation, BlendSpacing};
+    use vectorz_engine::Session;
 
-    fn frame(app: &mut VectorcraftApp) {
+    fn frame(app: &mut VectorzApp) {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::super::show(app, ui.ctx()));
         out.textures_delta.clear();
     }
 
-    fn spec(app: &VectorcraftApp, id: u64) -> vectorcraft_doc::BlendSpec {
-        match &app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().kind {
+    fn spec(app: &VectorzApp, id: u64) -> vectorz_doc::BlendSpec {
+        match &app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().kind {
             NodeKind::Blend { spec, .. } => (**spec).clone(),
             _ => panic!("not a blend"),
         }
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn opens_on_the_blend_previews_and_keeps_smooth_color() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
         app.run("shape.rectangle", json!({"x": 200, "y": 0, "width": 20, "height": 20})).unwrap();
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn with_nothing_selected_it_sets_what_new_blends_start_with() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("ui.blendOptions", json!({})).unwrap();
         assert_eq!(app.ui.dialog.as_ref().unwrap().str("__target"), "defaults");

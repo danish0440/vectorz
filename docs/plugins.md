@@ -1,8 +1,8 @@
 # Plug-ins: the WebAssembly plug-in API (ABI v1)
 
-VectorCraft does not host native plug-ins built for other illustration apps: that needs unsafe FFI into
+VectorZ does not host native plug-ins built for other illustration apps: that needs unsafe FFI into
 arbitrary machine code and cannot work in the browser build. Instead, plug-ins are **WebAssembly modules**
-run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web. The design follows PhotoCraft's
+run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web. The design follows PhotoZ's
 plug-in API (same sandbox, same manifest and parameter schema), extended for vector documents.
 
 There are two kinds of plug-in:
@@ -48,7 +48,7 @@ the object is drawn as if the effect weren't there, and the record is kept for w
 
 The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssembly interpreter
 (MIT OR Apache-2.0). It builds for `wasm32-unknown-unknown` too, so plug-ins also run in the web build. Limits
-(`vectorcraft_plugins::Limits`, defaults):
+(`vectorz_plugins::Limits`, defaults):
 
 | Limit | Default | On violation |
 |---|---|---|
@@ -141,7 +141,7 @@ object, holding only geometry (`type`, `path`, `fillRule`, `bounds`).
 ```
 
 - `type`: `"path"` or `"compound"` (a compound path: `path` holds its members' subpaths, painted as one).
-- `path`: VectorCraft's own path form. Each subpath is a run of anchors; `p` is the anchor, `in` / `out` its handles
+- `path`: VectorZ's own path form. Each subpath is a run of anchors; `p` is the anchor, `in` / `out` its handles
   (absent: no handle), `kind` `"Smooth"` when the handles stay collinear. Coordinates are points, y down.
 - `fills`, `strokes`: the object's fills and strokes in paint order (bottom first); `null` is no paint. Paints use the
   native file format's form: `{"type": "solid", "color", "swatch"?, "tint"?}`, `{"type": "gradient", "gradient":
@@ -202,7 +202,7 @@ crates/plugins/example/build.sh      # cargo build --release --target wasm32-unk
 The script also refreshes `crates/plugins/tests/fixtures/desaturate.wasm`, the test fixture built from that source.
 The crate is not a workspace member. Any language that targets core WebAssembly works (C, Zig, AssemblyScript,
 WAT…), as long as the module has no imports: in Rust, `std` on `wasm32-unknown-unknown` is fine as long as it never
-touches WASI. `vectorcraft_plugins::wat::module` is the skeleton of a plug-in in WebAssembly text, which the tests
+touches WASI. `vectorz_plugins::wat::module` is the skeleton of a plug-in in WebAssembly text, which the tests
 build their plug-ins from.
 
 ## Performance

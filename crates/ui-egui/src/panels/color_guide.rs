@@ -9,20 +9,20 @@
 
 use egui::{Rect, Sense, Ui, vec2};
 use serde_json::{Value, json};
-use vectorcraft_color::harmony::{Guide, GuideOptions, Harmony, Variation};
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_engine::cmd::swatchlib;
+use vectorz_color::harmony::{Guide, GuideOptions, Harmony, Variation};
+use vectorz_color::{Color, Paint};
+use vectorz_engine::cmd::swatchlib;
 
 use super::swatches::{self, colour_libraries, limit_key, limit_name};
 use super::{active_paint, apply_click, c32, color_json, library_panel, pstate, set_pstate};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::widgets::{self, menu_item};
 
 /// The base colour before one is set: an orange.
 const DEFAULT_BASE: Color = Color::Rgb { r: 230.0 / 255.0, g: 120.0 / 255.0, b: 40.0 / 255.0 };
 
 /// The guide's base colour: fixed once set; the current colour when the panel first shows.
-pub(crate) fn base_color(app: &VectorcraftApp, ctx: &egui::Context) -> Color {
+pub(crate) fn base_color(app: &VectorzApp, ctx: &egui::Context) -> Color {
     if let Some(c) = pstate::<Option<Color>>(ctx, "cg-base") {
         return c;
     }
@@ -58,7 +58,7 @@ struct GuideKey {
 }
 
 /// The guide the panel shows, limited to the Limit to Library colours.
-fn guide(app: &VectorcraftApp, ctx: &egui::Context) -> Guide {
+fn guide(app: &VectorzApp, ctx: &egui::Context) -> Guide {
     let (base, rule, opts) = (base_color(app, ctx), rule(ctx), app.ui.color_guide);
     let limit = &app.ui.color_guide_limit;
     if limit.is_empty() {
@@ -82,7 +82,7 @@ fn guide(app: &VectorcraftApp, ctx: &egui::Context) -> Guide {
 
 /// `ui.colorGuideLimit {library}`: limit the panel's colours to a swatch library (an id or name),
 /// the document's swatches ("document"), or nothing (`""` or null). → {limitTo, name}
-pub(crate) fn set_limit(app: &mut VectorcraftApp, p: &Value) -> Result<Value, String> {
+pub(crate) fn set_limit(app: &mut VectorzApp, p: &Value) -> Result<Value, String> {
     let key = match p.get("library").and_then(Value::as_str).unwrap_or_default() {
         "" => String::new(),
         l => limit_key(app, l)?,
@@ -93,7 +93,7 @@ pub(crate) fn set_limit(app: &mut VectorcraftApp, p: &Value) -> Result<Value, St
 }
 
 /// The Limit to Library popup: None, Document Swatches, then the colour libraries.
-fn limit_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
+fn limit_menu(app: &mut VectorzApp, ui: &mut Ui) {
     ui.set_min_width(200.0);
     let cur = app.ui.color_guide_limit.clone();
     let mut chosen = None;
@@ -112,7 +112,7 @@ fn limit_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
 
 /// Edit or Apply Colors: Recolor Artwork with the harmony colours as the new colours (of the
 /// selected art, or of the colours alone), limited to the panel's library.
-fn edit_or_apply(app: &mut VectorcraftApp, g: &Guide) {
+fn edit_or_apply(app: &mut VectorzApp, g: &Guide) {
     let mut p = json!({ "colors": g.colors.iter().map(color_json).collect::<Vec<_>>() });
     if limit_name(app, &app.ui.color_guide_limit).is_some() {
         p["library"] = json!(app.ui.color_guide_limit);
@@ -121,7 +121,7 @@ fn edit_or_apply(app: &mut VectorcraftApp, g: &Guide) {
 }
 
 /// Save the selected cells' colours as swatches (one undo step).
-fn save_selected(app: &mut VectorcraftApp, ctx: &egui::Context) {
+fn save_selected(app: &mut VectorzApp, ctx: &egui::Context) {
     let g = guide(app, ctx);
     let colors: Vec<Value> = selected(ctx).into_iter().filter_map(|(r, c)| g.grid.get(r)?.get(c)).map(color_json).collect();
     if !colors.is_empty() {
@@ -129,7 +129,7 @@ fn save_selected(app: &mut VectorcraftApp, ctx: &egui::Context) {
     }
 }
 
-pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn show(app: &mut VectorzApp, ui: &mut Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let h = rule(&ctx);
@@ -238,7 +238,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
-pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn menu(app: &mut VectorzApp, ui: &mut Ui) {
     let mode = app.ui.color_guide.variation;
     for (m, l) in [
         (Variation::TintsShades, tl!("Show Tints/Shades")),
@@ -262,15 +262,15 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_engine::Session;
+    use vectorz_engine::Session;
 
-    fn app() -> VectorcraftApp {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    fn app() -> VectorzApp {
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
         app
     }
 
-    fn frame(app: &mut VectorcraftApp, ctx: &egui::Context) {
+    fn frame(app: &mut VectorzApp, ctx: &egui::Context) {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             show(app, ui);
             menu(app, ui);
@@ -313,12 +313,12 @@ mod tests {
     }
 
     /// Every colour of the panel's guide.
-    fn shown(app: &VectorcraftApp, ctx: &egui::Context) -> Vec<String> {
+    fn shown(app: &VectorzApp, ctx: &egui::Context) -> Vec<String> {
         let g = guide(app, ctx);
         g.grid.iter().flatten().chain(&g.colors).map(Color::to_hex).collect()
     }
 
-    fn library_hexes(app: &VectorcraftApp, id: &str) -> Vec<String> {
+    fn library_hexes(app: &VectorzApp, id: &str) -> Vec<String> {
         let (_, lib) = swatchlib::library(&app.session, id).unwrap();
         lib.iter().filter_map(|w| w.paint.color()).map(|c| c.to_hex()).collect()
     }
@@ -380,6 +380,6 @@ mod tests {
         // Colours from elsewhere snap to the library as the dialog opens.
         app.run("ui.recolorDialog", json!({"colors": ["#123457"], "library": "web-safe-216"})).unwrap();
         let to = app.ui.dialog.as_ref().unwrap().fields["rows"][0]["to"].clone();
-        assert_eq!(vectorcraft_engine::cmd::color_value(&to).map(|c| c.to_hex()).as_deref(), Some("#003366"));
+        assert_eq!(vectorz_engine::cmd::color_value(&to).map(|c| c.to_hex()).as_deref(), Some("#003366"));
     }
 }

@@ -72,3 +72,17 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+----------------------------------------------------------------------------------------
+VectorZ (github.com/danish0440/vectorz)
+
+Based on VectorCraft by Storytold (ArtCraft), Apache-2.0. Changes by PINTAZ TECHNOLOGIES.
+
+VectorZ is a modified version of VectorCraft (https://github.com/storytold/vectorcraft). Changes made by
+PINTAZ TECHNOLOGIES (Malaysia), applied by .pintaz/rebrand.py on top of each upstream version:
+  - renamed to VectorZ (binaries, installers, bundle ids com.pintaz.*, data folders);
+  - the ArtCraft name, wordmark and marks removed (docs/brand/LICENSE-brand.txt), new Z icons;
+  - help/website links point to this fork; the About screen states the credit above;
+  - our own release and upstream-sync workflows (.github/workflows/*-z.yml).
+The licence files (LICENSE-MIT, LICENSE-APACHE) and all upstream copyright notices are unchanged.

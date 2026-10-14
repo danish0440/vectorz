@@ -1,20 +1,20 @@
 [package]
-name = "vectorcraft-pdf"
+name = "vectorz-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft PDF export and import"
+description = "VectorZ PDF export and import"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-effects = { workspace = true }
-vectorcraft-brush = { workspace = true }
-vectorcraft-color = { workspace = true }
-vectorcraft-text = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-effects = { workspace = true }
+vectorz-brush = { workspace = true }
+vectorz-color = { workspace = true }
+vectorz-text = { workspace = true }
 skrifa = { workspace = true }
 kurbo = { workspace = true }
 thiserror = { workspace = true }
@@ -35,9 +35,9 @@ md-5 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
-vectorcraft-testkit = { workspace = true }
+vectorz-testkit = { workspace = true }
 # A variable font built in code (no font file is committed).
-vectorcraft-text = { workspace = true, features = ["test-fonts"] }
+vectorz-text = { workspace = true, features = ["test-fonts"] }
 serde_json = { workspace = true }
 # `draw_text`, to write test files with live text as other writers do.
 krilla = { workspace = true, features = ["simple-text"] }

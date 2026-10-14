@@ -4,13 +4,13 @@
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use serde_json::json;
-use vectorcraft_engine::Session;
-use vectorcraft_tools::{PointerEvent, PointerKind};
+use vectorz_engine::Session;
+use vectorz_tools::{PointerEvent, PointerKind};
 
-use crate::{VectorcraftApp, menus};
+use crate::{VectorzApp, menus};
 
 struct App {
-    app: VectorcraftApp,
+    app: VectorzApp,
     ctx: egui::Context,
     time: f64,
 }
@@ -18,7 +18,7 @@ struct App {
 impl App {
     /// A document with a 37 pt wide rectangle (selected) and a second, unselected one.
     fn new() -> Self {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 200, "y": 150, "width": 20, "height": 20})).unwrap();
         app.run("shape.rectangle", json!({"x": 20, "y": 20, "width": 37, "height": 40})).unwrap();

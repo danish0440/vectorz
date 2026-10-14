@@ -11,15 +11,15 @@
 //! faces), nor scripts written for the reference app checked without running them (garbage,
 //! generated script text and mutated scripts).
 //!
-//! `PROPTEST_CASES=20000 cargo test -p vectorcraft-engine --test import_fuzz` runs a deeper search.
+//! `PROPTEST_CASES=20000 cargo test -p vectorz-engine --test import_fuzz` runs a deeper search.
 // Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md › Robustness).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use proptest::prelude::*;
 use serde_json::{Value, json};
-use vectorcraft_doc::Document;
-use vectorcraft_testkit::catch_quiet;
-use vectorcraft_testkit::fixtures::rich_session;
+use vectorz_doc::Document;
+use vectorz_testkit::catch_quiet;
+use vectorz_testkit::fixtures::rich_session;
 
 /// 64 cases each, unless `PROPTEST_CASES` asks for more.
 fn config() -> ProptestConfig {
@@ -38,7 +38,7 @@ fn affinity_preview_sample() -> Vec<u8> {
     let mut png = Vec::new();
     im.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let mut b = vec![0; 72];
-    b[..4].copy_from_slice(vectorcraft_affinity::MAGIC);
+    b[..4].copy_from_slice(vectorz_affinity::MAGIC);
     b[4..6].copy_from_slice(&12u16.to_le_bytes());
     b[8..12].copy_from_slice(b"nsrP");
     b[12..16].copy_from_slice(b"#Inf");
@@ -59,7 +59,7 @@ fn affinity_preview_sample() -> Vec<u8> {
 /// parametric shape it knows, a compound, gradients, a stroke, text, a mask and an artboard. Not
 /// an Affinity writer: the layout is the one the reader accepts.
 fn affinity_native_stream() -> Vec<u8> {
-    use vectorcraft_affinity::synth::{self, F, tag};
+    use vectorz_affinity::synth::{self, F, tag};
     let f32s = |v: &[f32]| F::Struct(v.iter().flat_map(|x| x.to_le_bytes()).collect());
     let rec = |x: f64, y: f64, role: u8| {
         let mut r = x.to_le_bytes().to_vec();
@@ -186,14 +186,14 @@ fn affinity_native_stream() -> Vec<u8> {
     ])
 }
 
-fn affinity_native(stream: &[u8], method: vectorcraft_affinity::synth::Method) -> Vec<u8> {
-    vectorcraft_affinity::synth::container(&[("doc.dat", stream, method)], None)
+fn affinity_native(stream: &[u8], method: vectorz_affinity::synth::Method) -> Vec<u8> {
+    vectorz_affinity::synth::container(&[("doc.dat", stream, method)], None)
 }
 
 #[test]
 fn the_native_affinity_sample_reaches_every_reader_path() {
-    let bytes = affinity_native(&affinity_native_stream(), vectorcraft_affinity::synth::Method::Zstd);
-    let l = vectorcraft_engine::cmd::fileio::load("x.af", &bytes).unwrap();
+    let bytes = affinity_native(&affinity_native_stream(), vectorz_affinity::synth::Method::Zstd);
+    let l = vectorz_engine::cmd::fileio::load("x.af", &bytes).unwrap();
     assert!(!l.preview_only, "{:?}", l.warnings);
     let kinds = l.doc.layers.iter().flat_map(|l| l.children().into_iter().flatten()).count();
     assert!(kinds > 0);
@@ -216,8 +216,8 @@ proptest! {
         let n = stream.len();
         for (at, b) in edits { stream[at % n] = b; }
         stream.truncate(cut.max(16));
-        let bytes = affinity_native(&stream, vectorcraft_affinity::synth::Method::Stored);
-        survive("Affinity native stream", || vectorcraft_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
+        let bytes = affinity_native(&stream, vectorz_affinity::synth::Method::Stored);
+        survive("Affinity native stream", || vectorz_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
     }
 
     #[test]
@@ -225,19 +225,19 @@ proptest! {
         edits in prop::collection::vec((0usize..8192, any::<u8>()), 1..16),
         method in 0u8..3,
     ) {
-        use vectorcraft_affinity::synth::Method;
+        use vectorz_affinity::synth::Method;
         let m = [Method::Stored, Method::Zlib, Method::Zstd][usize::from(method)];
         let mut bytes = affinity_native(&affinity_native_stream(), m);
         let n = bytes.len();
         for (at, b) in edits { bytes[at % n] = b; }
-        survive("Affinity native container", || vectorcraft_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
+        survive("Affinity native container", || vectorz_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
     }
 
     #[test]
     fn affinity_garbage_never_panics(tail in prop::collection::vec(any::<u8>(), 0..2048)) {
-        let mut bytes = vectorcraft_affinity::MAGIC.to_vec();
+        let mut bytes = vectorz_affinity::MAGIC.to_vec();
         bytes.extend(tail);
-        survive("Affinity garbage", || vectorcraft_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
+        survive("Affinity garbage", || vectorz_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
     }
 
     #[test]
@@ -250,17 +250,17 @@ proptest! {
             if let Some(byte) = bytes.get_mut(at) { *byte = b; }
         }
         bytes.truncate(cut);
-        survive("Affinity preview", || vectorcraft_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
+        survive("Affinity preview", || vectorz_engine::cmd::fileio::load("x.af", &bytes).ok().map(|l| l.doc))?;
     }
 
     #[test]
     fn affinity_placement_is_rejected_without_panicking(tail in prop::collection::vec(any::<u8>(), 0..2048)) {
-        let mut bytes = vectorcraft_affinity::MAGIC.to_vec();
+        let mut bytes = vectorz_affinity::MAGIC.to_vec();
         bytes.extend(tail);
         let r = catch_quiet(|| {
-            let mut s = vectorcraft_engine::Session::new();
+            let mut s = vectorz_engine::Session::new();
             s.execute("file.new", &json!({"width":100,"height":100})).unwrap();
-            let p = json!({"name":"renamed.png", "dataBase64":vectorcraft_format::base64_encode(&bytes)});
+            let p = json!({"name":"renamed.png", "dataBase64":vectorz_format::base64_encode(&bytes)});
             for cmd in ["file.place", "file.place.info"] { assert!(no_panic(s.execute(cmd, &p)).is_err()); }
             assert!(no_panic(s.execute("file.place.queue", &json!({"files":[p]}))).is_err());
         });
@@ -272,16 +272,16 @@ proptest! {
 fn survive(what: &str, import: impl FnOnce() -> Option<Document>) -> Result<(), TestCaseError> {
     let r = catch_quiet(|| {
         if let Some(d) = import() {
-            let mut r = vectorcraft_render::Renderer::new();
+            let mut r = vectorz_render::Renderer::new();
             if let Some(ab) = d.artboards.first() {
                 let scale = (256.0 / ab.rect.width().max(ab.rect.height()).max(1.0)).min(1.0);
-                if vectorcraft_render::raster_size(ab.rect, scale).is_ok() {
+                if vectorz_render::raster_size(ab.rect, scale).is_ok() {
                     let _ = r.render_region(&d, ab.rect, scale, true).to_png();
                 }
             }
-            let _ = vectorcraft_svg::export(&d, &vectorcraft_svg::ExportOptions::default());
-            let _ = vectorcraft_engine::export_pdf(&d, &vectorcraft_pdf::PdfOptions::default());
-            let _ = vectorcraft_format::save_file(&d);
+            let _ = vectorz_svg::export(&d, &vectorz_svg::ExportOptions::default());
+            let _ = vectorz_engine::export_pdf(&d, &vectorz_pdf::PdfOptions::default());
+            let _ = vectorz_format::save_file(&d);
         }
     });
     r.map_err(|msg| TestCaseError::fail(format!("{what}: panicked: {msg}")))
@@ -292,11 +292,11 @@ fn rich_doc() -> Document {
 }
 
 fn rich_svg() -> String {
-    vectorcraft_svg::export(&rich_doc(), &vectorcraft_svg::ExportOptions::default())
+    vectorz_svg::export(&rich_doc(), &vectorz_svg::ExportOptions::default())
 }
 
 fn rich_pdf() -> Vec<u8> {
-    vectorcraft_engine::export_pdf(&rich_doc(), &vectorcraft_pdf::PdfOptions::uncompressed()).unwrap()
+    vectorz_engine::export_pdf(&rich_doc(), &vectorz_pdf::PdfOptions::uncompressed()).unwrap()
 }
 
 /// Numbers that tend to break arithmetic: zero, negatives, huge, tiny, exponents, junk.
@@ -361,7 +361,7 @@ fn arb_svg_attr() -> impl Strategy<Value = String> {
         "stroke",
         "stop-color",
         "mask-type",
-        "data-vectorcraft-mask",
+        "data-vectorz-mask",
         "href",
         "baseline-shift",
         "word-spacing",
@@ -491,8 +491,8 @@ fn mutate_text(src: &str, cut: usize, edits: &[(usize, char)]) -> String {
 #[test]
 fn svg_type_shifted_two_billion_points_exports_to_pdf() {
     let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><text baseline-shift="-2147483649">f</text></svg>"#;
-    let d = vectorcraft_svg::import(svg).unwrap();
-    assert!(vectorcraft_engine::export_pdf(&d, &vectorcraft_pdf::PdfOptions::default()).is_ok());
+    let d = vectorz_svg::import(svg).unwrap();
+    assert!(vectorz_engine::export_pdf(&d, &vectorz_pdf::PdfOptions::default()).is_ok());
 }
 
 proptest! {
@@ -500,7 +500,7 @@ proptest! {
 
     #[test]
     fn svg_garbage_never_panics(s in ".{0,300}") {
-        survive("svg garbage", || vectorcraft_svg::import(&s).ok())?;
+        survive("svg garbage", || vectorz_svg::import(&s).ok())?;
     }
 
     #[test]
@@ -509,7 +509,7 @@ proptest! {
         body in prop::collection::vec(arb_svg_element(2), 0..6),
     ) {
         let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"{}>{}</svg>", root.concat(), body.concat());
-        survive(&svg, || vectorcraft_svg::import(&svg).ok())?;
+        survive(&svg, || vectorz_svg::import(&svg).ok())?;
     }
 
     #[test]
@@ -522,7 +522,7 @@ proptest! {
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><style>{sheet}</style><g class=\"a b\"><text id=\"t\" class=\"a\" x=\"1 2 3\" y=\"9\" rotate=\"5\" style=\"{decls}\">ab<tspan dy=\"3\">c</tspan></text></g>{}</svg>",
             body.concat()
         );
-        survive(&svg, || vectorcraft_svg::import(&svg).ok())?;
+        survive(&svg, || vectorz_svg::import(&svg).ok())?;
     }
 
     #[test]
@@ -531,7 +531,7 @@ proptest! {
         edits in prop::collection::vec((0usize..20_000, prop::sample::select(vec!['<', '>', '"', '/', '-', '9', 'e', '.', ' ', '#', '%', '&', ';', 'x'])), 0..10),
     ) {
         let svg = mutate_text(&rich_svg(), cut, &edits);
-        survive("mutated svg", || vectorcraft_svg::import(&svg).ok())?;
+        survive("mutated svg", || vectorz_svg::import(&svg).ok())?;
     }
 }
 
@@ -621,7 +621,7 @@ proptest! {
     fn pdf_garbage_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..600)) {
         let mut b = b"%PDF-1.7\n".to_vec();
         b.extend(bytes);
-        survive("pdf garbage", || vectorcraft_pdf::import(&b).ok())?;
+        survive("pdf garbage", || vectorz_pdf::import(&b).ok())?;
     }
 
     #[test]
@@ -631,7 +631,7 @@ proptest! {
         media in prop::sample::select(vec!["[0 0 100 100]", "[0 0 0 0]", "[0 0 1e308 1e308]", "[100 100 0 0]", "[-5 -5 -1 -1]", "[0 0 14400 14400]", "[]", "[0 0 NaN 5]"]),
     ) {
         let pdf = handmade_pdf(&ops.join("\n"), &resources, media);
-        survive(&ops.join(" "), || vectorcraft_pdf::import(&pdf).ok())?;
+        survive(&ops.join(" "), || vectorz_pdf::import(&pdf).ok())?;
     }
 
     #[test]
@@ -645,7 +645,7 @@ proptest! {
             b[i % n] = c;
         }
         b.truncate(cut.min(b.len()).max(9));
-        survive("mutated pdf", || vectorcraft_pdf::import(&b).ok())?;
+        survive("mutated pdf", || vectorz_pdf::import(&b).ok())?;
     }
 }
 
@@ -676,7 +676,7 @@ proptest! {
         pages in prop::sample::select(vec!["1", "2", "1-2", "2-1", "0", "-", "1-", "all", "1,1,2", "99999999999999999999"]),
         crop in prop::sample::select(vec!["bounding", "art", "crop", "trim", "bleed", "media", "nope"]),
     ) {
-        use vectorcraft_testkit::pdf::{PdfPage, pdf};
+        use vectorz_testkit::pdf::{PdfPage, pdf};
         let page = PdfPage {
             media: boxes[0].unwrap_or([0.0, 0.0, 100.0, 100.0]),
             crop: boxes[1],
@@ -687,9 +687,9 @@ proptest! {
             ..PdfPage::new(0.0, 0.0, "0 0 1 rg 20 20 50 50 re f")
         };
         let bytes = pdf(&[page.clone(), page], encrypt.then_some("pw"));
-        let b64 = vectorcraft_format::base64_encode(&bytes);
+        let b64 = vectorz_format::base64_encode(&bytes);
         let r = catch_quiet(|| {
-            let mut s = vectorcraft_engine::Session::new();
+            let mut s = vectorz_engine::Session::new();
             let p = json!({"name": "x.pdf", "dataBase64": b64, "pages": pages, "cropTo": crop, "password": password, "thumbnail": 1, "thumbnailSize": 64});
             let _ = no_panic(s.execute("document.pdfInfo", &p));
             if no_panic(s.execute("document.open", &p)).is_ok() {
@@ -704,7 +704,7 @@ proptest! {
 /// Hostile content over layers (optional content, one group off), soft masks, tiling patterns,
 /// a patch mesh, an unextended shading and fonts: the import's own readings of the file.
 fn rich_resources_pdf(content: &str, config: &str) -> Vec<u8> {
-    use vectorcraft_testkit::pdf::{PdfPage, first_extra, pdf_with_catalog};
+    use vectorz_testkit::pdf::{PdfPage, first_extra, pdf_with_catalog};
     let x = first_extra(1);
     let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len());
     let extra = [
@@ -780,12 +780,12 @@ proptest! {
         outlines in any::<bool>(),
     ) {
         let bytes = rich_resources_pdf(&ops.join("\n"), config);
-        let opts = vectorcraft_pdf::ImportOptions {
+        let opts = vectorz_pdf::ImportOptions {
             layers,
-            text_as: if outlines { vectorcraft_pdf::TextAs::Outlines } else { vectorcraft_pdf::TextAs::Text },
+            text_as: if outlines { vectorz_pdf::TextAs::Outlines } else { vectorz_pdf::TextAs::Text },
             ..Default::default()
         };
-        survive(&ops.join(" "), || vectorcraft_pdf::import_with_report(&bytes, &opts).ok().map(|r| r.document))?;
+        survive(&ops.join(" "), || vectorz_pdf::import_with_report(&bytes, &opts).ok().map(|r| r.document))?;
     }
 }
 
@@ -798,8 +798,8 @@ fn saved(cmd: &str, params: Value) -> String {
 
 /// `r`, after failing the case if the command panicked. The engine's guard reports a panic as
 /// `EngineError::Internal`.
-fn no_panic(r: Result<Value, vectorcraft_engine::EngineError>) -> Result<Value, vectorcraft_engine::EngineError> {
-    if let Err(vectorcraft_engine::EngineError::Internal { cmd, msg }) = &r {
+fn no_panic(r: Result<Value, vectorz_engine::EngineError>) -> Result<Value, vectorz_engine::EngineError> {
+    if let Err(vectorz_engine::EngineError::Internal { cmd, msg }) = &r {
         panic!("{cmd} panicked: {msg}");
     }
     r
@@ -807,7 +807,7 @@ fn no_panic(r: Result<Value, vectorcraft_engine::EngineError>) -> Result<Value, 
 
 /// Library file `data` loaded with `load`; what it holds is then used on the rich document
 /// (`then`, given the load's result), which renders and exports.
-fn survive_library(what: &str, load: &str, data: &str, then: impl FnOnce(&mut vectorcraft_engine::Session, &Value)) -> Result<(), TestCaseError> {
+fn survive_library(what: &str, load: &str, data: &str, then: impl FnOnce(&mut vectorz_engine::Session, &Value)) -> Result<(), TestCaseError> {
     survive(what, || {
         let mut s = rich_session();
         let r = no_panic(s.execute(load, &json!({"data": data, "name": "fuzz"}))).ok()?;
@@ -890,7 +890,7 @@ fn flattener_presets(what: &str, data: &str) -> Result<(), TestCaseError> {
 fn swatch_exchange(what: &str, bytes: &[u8]) -> Result<(), TestCaseError> {
     survive(what, || {
         let mut s = rich_session();
-        let load = json!({"dataBase64": vectorcraft_format::base64_encode(bytes), "name": "fuzz.ase"});
+        let load = json!({"dataBase64": vectorz_format::base64_encode(bytes), "name": "fuzz.ase"});
         let r = no_panic(s.execute("swatch.library.load", &load)).ok()?;
         let _ = no_panic(s.execute("swatch.library.add", &json!({"library": r["library"], "apply": "fill"})));
         Some((*s.doc().ok()?.doc).clone())
@@ -906,7 +906,7 @@ fn saved_ase() -> Vec<u8> {
         s.execute("swatch.new", &json!({"name": "Ink", "color": {"c": 1, "m": 0.5, "y": 0, "k": 0.2}, "spot": true})).unwrap();
         s.execute("swatch.new", &json!({"name": "Clay", "color": {"l": 50, "a": 20, "b": -30}, "global": true})).unwrap();
         let r = s.execute("swatch.library.save", &json!({"format": "ase"})).unwrap();
-        vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
+        vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
     })
     .clone()
 }
@@ -986,7 +986,7 @@ proptest! {
 
     #[test]
     fn mutated_swatch_exchange_files_never_panic(cut in prop::option::of(0usize..200), edits in prop::collection::vec((0usize..200, any::<u8>()), 0..12)) {
-        let mut bytes = vectorcraft_testkit::ase::sample();
+        let mut bytes = vectorz_testkit::ase::sample();
         for (at, b) in edits {
             let n = bytes.len();
             bytes[at % n] = b;
@@ -1025,11 +1025,11 @@ fn raster_samples() -> Vec<(&'static str, Vec<u8>)> {
         img.write_to(&mut std::io::Cursor::new(&mut b), f).unwrap();
         out.push((name, b));
     }
-    out[0].1 = vectorcraft_engine::cmd::fileio::ppi::with_png_resolution(&out[0].1, (300.0, 150.0));
-    // A layered PSD with transparency (as VectorCraft exports it), and a PackBits PSB by hand.
+    out[0].1 = vectorz_engine::cmd::fileio::ppi::with_png_resolution(&out[0].1, (300.0, 150.0));
+    // A layered PSD with transparency (as VectorZ exports it), and a PackBits PSB by hand.
     let mut s = rich_session();
     let r = s.execute("document.export", &json!({"format": "psd", "ppi": 2})).unwrap();
-    out.push(("a.psd", vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()));
+    out.push(("a.psd", vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()));
     let mut psb = b"8BPS\0\x02\0\0\0\0\0\0\0\x04\0\0\0\x02\0\0\0\x03\0\x08\0\x03".to_vec();
     psb.extend([0; 8]);
     psb.extend(10u64.to_be_bytes());
@@ -1057,11 +1057,11 @@ proptest! {
         }
         bytes.truncate(cut.max(8));
         let r = catch_quiet(|| {
-            let _ = vectorcraft_engine::cmd::fileio::ppi::resolution(&bytes);
-            let _ = vectorcraft_engine::cmd::fileio::ppi::with_png_resolution(&bytes, (72.0, 72.0));
-            let mut s = vectorcraft_engine::Session::new();
+            let _ = vectorz_engine::cmd::fileio::ppi::resolution(&bytes);
+            let _ = vectorz_engine::cmd::fileio::ppi::with_png_resolution(&bytes, (72.0, 72.0));
+            let mut s = vectorz_engine::Session::new();
             s.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
-            let p = json!({"name": name, "dataBase64": vectorcraft_format::base64_encode(&bytes), "thumbnail": 8});
+            let p = json!({"name": name, "dataBase64": vectorz_format::base64_encode(&bytes), "thumbnail": 8});
             let _ = no_panic(s.execute("file.place.info", &p));
             let _ = no_panic(s.execute("file.place", &p));
         });
@@ -1077,8 +1077,8 @@ fn saved_svg() -> String {
     if let Some(l) = d.layers.first_mut() {
         std::sync::Arc::make_mut(l).visible = false;
     }
-    let opts = vectorcraft_svg::ExportOptions { hidden_layers: true, preserve_editing: true, ..Default::default() };
-    vectorcraft_svg::export_full(&d, &opts, Some(&vectorcraft_format::save(&d, false))).svg
+    let opts = vectorz_svg::ExportOptions { hidden_layers: true, preserve_editing: true, ..Default::default() };
+    vectorz_svg::export_full(&d, &opts, Some(&vectorz_format::save(&d, false))).svg
 }
 
 proptest! {
@@ -1090,7 +1090,7 @@ proptest! {
         edits in prop::collection::vec((0usize..40_000, prop::sample::select(vec!['<', '>', '"', '/', '-', '9', 'e', '.', ' ', '#', '%', '&', ';', 'x', ']', 'A'])), 0..10),
     ) {
         let svg = mutate_text(&saved_svg(), cut, &edits);
-        survive("mutated saved svg", || vectorcraft_engine::cmd::fileio::load("saved.svg", svg.as_bytes()).ok().map(|l| l.doc))?;
+        survive("mutated saved svg", || vectorz_engine::cmd::fileio::load("saved.svg", svg.as_bytes()).ok().map(|l| l.doc))?;
     }
 }
 
@@ -1101,7 +1101,7 @@ fn saved_ai() -> Vec<u8> {
     static AI: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     AI.get_or_init(|| {
         let r = rich_session().execute("document.save", &json!({"format": "ai", "compression": {"compressText": false}})).unwrap();
-        vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
+        vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
     })
     .clone()
 }
@@ -1120,7 +1120,7 @@ proptest! {
             b[i % n] = c;
         }
         b.truncate(cut.min(b.len()).max(9));
-        survive("mutated ai", || vectorcraft_engine::cmd::fileio::load("saved.ai", &b).ok().map(|l| l.doc))?;
+        survive("mutated ai", || vectorz_engine::cmd::fileio::load("saved.ai", &b).ok().map(|l| l.doc))?;
     }
 }
 
@@ -1146,7 +1146,7 @@ proptest! {
 
     #[test]
     fn mutated_pdf_presets_never_panic(cut in 0usize..20_000, edits in prop::collection::vec(arb_edit(), 0..10)) {
-        let text = saved("pdf.preset.export", json!({"names": ["VectorCraft Default", "Smallest File Size", "PDF/X-4:2010"]}));
+        let text = saved("pdf.preset.export", json!({"names": ["VectorZ Default", "Smallest File Size", "PDF/X-4:2010"]}));
         pdf_presets("mutated pdf presets", &mutate_text(&text, cut, &edits))?;
     }
 }
@@ -1156,7 +1156,7 @@ proptest! {
 /// Load `p` into the clipboard with `cmd`, then paste it into a new document: neither may panic.
 fn paste_from_elsewhere(cmd: &str, p: Value) -> Result<(), TestCaseError> {
     let r = catch_quiet(|| {
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         s.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
         if no_panic(s.execute(cmd, &p)).is_ok() {
             // Paste may refuse what it was given, e.g. a damaged PDF whose art spans more than the
@@ -1183,7 +1183,7 @@ fn mutated_b64(mut bytes: Vec<u8>, cut: usize, edits: &[(usize, u8)]) -> String 
         }
     }
     bytes.truncate(cut.max(8));
-    vectorcraft_format::base64_encode(&bytes)
+    vectorz_format::base64_encode(&bytes)
 }
 
 proptest! {
@@ -1212,7 +1212,7 @@ proptest! {
 
 /// The rich document saved compressed, as v1 and as v2 (pretty).
 fn native_samples() -> &'static [Vec<u8>] {
-    use vectorcraft_format::{SaveOptions, save_with};
+    use vectorz_format::{SaveOptions, save_with};
     static SAMPLES: std::sync::OnceLock<Vec<Vec<u8>>> = std::sync::OnceLock::new();
     SAMPLES.get_or_init(|| {
         let d = rich_doc();
@@ -1243,7 +1243,7 @@ proptest! {
     fn native_mutated_files_never_panic(which in 0usize..4, cut in 0usize..80_000, edits in prop::collection::vec((0usize..80_000, any::<u8>()), 0..10)) {
         let samples = native_samples();
         let mut bytes = samples.get(which).cloned().unwrap_or_else(|| {
-            let mut f = vectorcraft_format::save(&rich_doc(), false);
+            let mut f = vectorz_format::save(&rich_doc(), false);
             f.truncate(cut.max(16));
             f
         });
@@ -1256,9 +1256,9 @@ proptest! {
         } else {
             bytes = gzip(&bytes);
         }
-        let _ = vectorcraft_format::sniff(&bytes);
-        let _ = vectorcraft_format::preview(&bytes);
-        survive("mutated native file", || vectorcraft_engine::cmd::fileio::load("x.vectorcraft", &bytes).ok().map(|l| l.doc))?;
+        let _ = vectorz_format::sniff(&bytes);
+        let _ = vectorz_format::preview(&bytes);
+        survive("mutated native file", || vectorz_engine::cmd::fileio::load("x.vectorz", &bytes).ok().map(|l| l.doc))?;
     }
 }
 
@@ -1267,7 +1267,7 @@ proptest! {
 fn eps_sample() -> Vec<u8> {
     let mut s = rich_session();
     let r = s.execute("document.export", &json!({"format": "eps", "useArtboards": false})).unwrap();
-    vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
+    vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
 }
 
 proptest! {
@@ -1284,9 +1284,9 @@ proptest! {
             bytes[at % n] = b;
         }
         bytes.truncate(cut.max(4));
-        let _ = vectorcraft_eps::sections(&bytes);
-        let _ = vectorcraft_eps::thumbnail(&bytes);
-        survive("mutated EPS file", || vectorcraft_eps::native(&bytes).and_then(|n| vectorcraft_format::load(&n).ok()))?;
+        let _ = vectorz_eps::sections(&bytes);
+        let _ = vectorz_eps::thumbnail(&bytes);
+        survive("mutated EPS file", || vectorz_eps::native(&bytes).and_then(|n| vectorz_format::load(&n).ok()))?;
     }
 
     /// Damaged EPS files without the document: the PostScript interpreter (or the preview
@@ -1300,7 +1300,7 @@ proptest! {
             bytes[at % n] = b;
         }
         bytes.truncate(cut.max(4));
-        survive("mutated EPS PostScript", || vectorcraft_eps::import(&bytes).ok().map(|r| r.document))?;
+        survive("mutated EPS PostScript", || vectorz_eps::import(&bytes).ok().map(|r| r.document))?;
     }
 
     /// A damaged EPS another app copied: Paste reads it as an error or as objects.
@@ -1323,10 +1323,10 @@ proptest! {
             ("", "")
         };
         let ps = format!("%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 200 200\n{head}\n{open}{}{close}\nshowpage\n", tokens.join(" "));
-        survive("hostile PostScript", || vectorcraft_engine::cmd::fileio::load("x.eps", ps.as_bytes()).ok().map(|l| l.doc))?;
+        survive("hostile PostScript", || vectorz_engine::cmd::fileio::load("x.eps", ps.as_bytes()).ok().map(|l| l.doc))?;
         let r = catch_quiet(|| {
             let mut s = rich_session();
-            let _ = no_panic(s.execute("file.place", &json!({"name": "x.eps", "dataBase64": vectorcraft_format::base64_encode(ps.as_bytes())})));
+            let _ = no_panic(s.execute("file.place", &json!({"name": "x.eps", "dataBase64": vectorz_format::base64_encode(ps.as_bytes())})));
         });
         r.map_err(|msg| TestCaseError::fail(format!("placing hostile PostScript panicked: {msg}")))?;
     }
@@ -1336,7 +1336,7 @@ proptest! {
 /// PostScript is read.
 fn foreign_eps_sample() -> Vec<u8> {
     let mut bytes = eps_sample();
-    let marker = b"%VectorCraft_BeginData: native";
+    let marker = b"%VectorZ_BeginData: native";
     let at = bytes.windows(marker.len()).position(|w| w == marker).unwrap();
     bytes[at + marker.len() - 1] = b'x';
     bytes
@@ -1416,11 +1416,11 @@ proptest! {
         edits in prop::collection::vec((0usize..2_000, any::<u8>()), 0..12),
         password in prop::sample::select(vec!["pw", "pw-owner", "wrong", ""]),
     ) {
-        use vectorcraft_testkit::pdf::{PdfPage, pdf};
+        use vectorz_testkit::pdf::{PdfPage, pdf};
         let bytes = pdf(&[PdfPage::new(100.0, 100.0, "0 0 1 rg 20 20 50 50 re f")], Some("pw"));
         let b64 = mutated_b64(bytes, cut, &edits);
         let r = catch_quiet(|| {
-            let mut s = vectorcraft_engine::Session::new();
+            let mut s = vectorz_engine::Session::new();
             let p = json!({"name": "x.pdf", "dataBase64": b64, "password": password});
             let _ = no_panic(s.execute("document.pdfInfo", &p));
             if no_panic(s.execute("document.open", &p)).is_ok() {
@@ -1436,7 +1436,7 @@ proptest! {
 
 /// The rich document exported as DXF (2018: hatches, splines, text, images; R12: polylines).
 fn rich_dxf(version: &str) -> Vec<u8> {
-    vectorcraft_engine::cmd::fileio::encode(&rich_doc(), "dxf", &json!({"version": version, "preserve": "editability"})).unwrap()
+    vectorz_engine::cmd::fileio::encode(&rich_doc(), "dxf", &json!({"version": version, "preserve": "editability"})).unwrap()
 }
 
 /// Group-code pairs as DXF text.
@@ -1486,14 +1486,14 @@ fn hostile_dxf(block: &[Vec<(i32, String)>], body: &[Vec<(i32, String)>]) -> Vec
 
 /// Import with every option at once, and place it; whatever comes back must render and export.
 fn survive_dxf(what: &str, bytes: &[u8], fit: bool) -> Result<(), TestCaseError> {
-    let o = vectorcraft_cad::ImportOptions { fit, center: !fit, merge_layers: fit, ..Default::default() };
-    survive(what, || vectorcraft_cad::import(bytes, &o).ok().map(|r| r.document))?;
-    let _ = vectorcraft_cad::info(bytes);
-    let _ = vectorcraft_cad::is_dxf(bytes);
+    let o = vectorz_cad::ImportOptions { fit, center: !fit, merge_layers: fit, ..Default::default() };
+    survive(what, || vectorz_cad::import(bytes, &o).ok().map(|r| r.document))?;
+    let _ = vectorz_cad::info(bytes);
+    let _ = vectorz_cad::is_dxf(bytes);
     survive(what, || {
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         no_panic(s.execute("file.new", &json!({"width": 300, "height": 200}))).ok()?;
-        let p = json!({"name": "x.dxf", "dataBase64": vectorcraft_format::base64_encode(bytes), "dxf": {"fit": fit}, "thumbnail": 8});
+        let p = json!({"name": "x.dxf", "dataBase64": vectorz_format::base64_encode(bytes), "dxf": {"fit": fit}, "thumbnail": 8});
         let _ = no_panic(s.execute("file.place.info", &p));
         let _ = no_panic(s.execute("file.place", &p));
         let _ = no_panic(s.execute("document.dxfInfo", &p));
@@ -1550,7 +1550,7 @@ fn metafile_samples() -> &'static [Vec<u8>] {
             .iter()
             .map(|f| {
                 let r = s.execute("document.export", &json!({ "format": f })).unwrap();
-                vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
+                vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap()
             })
             .collect()
     })
@@ -1597,11 +1597,11 @@ fn wmf_of(records: &[(u16, Vec<u8>)]) -> Vec<u8> {
 
 /// Open the bytes as `name`, and place them: neither may panic.
 fn survive_metafile(what: &str, name: &str, bytes: &[u8]) -> Result<(), TestCaseError> {
-    survive(what, || vectorcraft_engine::cmd::fileio::load(name, bytes).ok().map(|l| l.doc))?;
+    survive(what, || vectorz_engine::cmd::fileio::load(name, bytes).ok().map(|l| l.doc))?;
     let r = catch_quiet(|| {
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         s.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
-        let _ = no_panic(s.execute("file.place", &json!({"name": name, "dataBase64": vectorcraft_format::base64_encode(bytes)})));
+        let _ = no_panic(s.execute("file.place", &json!({"name": name, "dataBase64": vectorz_format::base64_encode(bytes)})));
     });
     prop_assert!(r.is_ok(), "{what}: placing panicked: {:?}", r.err());
     Ok(())
@@ -1616,7 +1616,7 @@ fn arb_body() -> impl Strategy<Value = Vec<u8>> {
     ]
 }
 
-/// WMF record functions VectorCraft reads, and one it doesn't.
+/// WMF record functions VectorZ reads, and one it doesn't.
 const WMF_FUNCTIONS: [u16; 33] = [
     0x0324, 0x0325, 0x0538, 0x041B, 0x0418, 0x061C, 0x0817, 0x081A, 0x0830, 0x0416, 0x0415, 0x02FA, 0x02FC, 0x02FB, 0x012D, 0x01F0, 0x0521, 0x0A32,
     0x0F43, 0x0B41, 0x0940, 0x061D, 0x0213, 0x0214, 0x001E, 0x0127, 0x0106, 0x0209, 0x012E, 0x00F7, 0x01F9, 0x0142, 0x0999,
@@ -1843,13 +1843,13 @@ const FRAME_OBJECTS: &str = "/AI11Text :\n0 /FrameIndex ,\n0 /StoryIndex ,\n;\n/
 /// The fuzzed fixture, as it is, reads as area type in two threaded frames and type on a path.
 #[test]
 fn the_frames_fixture_reads_as_threaded_area_type_and_type_on_a_path() {
-    let l = vectorcraft_engine::cmd::fileio::load("x.eps", &text_eps_of(&frames_document_text(), FRAME_OBJECTS)).unwrap();
+    let l = vectorz_engine::cmd::fileio::load("x.eps", &text_eps_of(&frames_document_text(), FRAME_OBJECTS)).unwrap();
     let mut kinds = vec![];
     l.doc.walk(|n| {
-        if let vectorcraft_doc::NodeKind::Text(t) = &n.kind {
+        if let vectorz_doc::NodeKind::Text(t) = &n.kind {
             kinds.push(match t.kind {
-                vectorcraft_doc::TextKind::Area { .. } => "area",
-                vectorcraft_doc::TextKind::OnPath { .. } => "path",
+                vectorz_doc::TextKind::Area { .. } => "area",
+                vectorz_doc::TextKind::OnPath { .. } => "path",
                 _ => "point",
             });
         }
@@ -1865,10 +1865,10 @@ fn the_frames_fixture_reads_as_threaded_area_type_and_type_on_a_path() {
 fn a_text_frame_with_a_control_point_at_8e115_opens_with_its_story_in_the_next_frame() {
     let text = mutate_text(&frames_document_text(), 1397, &[(191, '1'), (1586, 'e')]);
     assert!(text.contains(" 8e0115 "));
-    let l = vectorcraft_engine::cmd::fileio::load("x.eps", &text_eps_of(&text, FRAME_OBJECTS)).unwrap();
+    let l = vectorz_engine::cmd::fileio::load("x.eps", &text_eps_of(&text, FRAME_OBJECTS)).unwrap();
     let mut texts = vec![];
     l.doc.walk(|n| {
-        if let vectorcraft_doc::NodeKind::Text(t) = &n.kind {
+        if let vectorz_doc::NodeKind::Text(t) = &n.kind {
             texts.push(t.plain_text());
         }
     });
@@ -1901,7 +1901,7 @@ proptest! {
     fn eps_text_document_never_panics(cut in 0usize..1_500, edits in prop::collection::vec((0usize..1_500, prop::sample::select(vec!['0', '9', '-', '.', ' ', '\n', '(', ')', '/', '[', ']', '<', '>', '\\', 'e', '1'])), 0..12)) {
         let text = mutate_text(&text_document_text(), cut, &edits);
         let bytes = text_eps(&text);
-        survive("mutated EPS text document", || vectorcraft_eps::import(&bytes).ok().map(|r| r.document))?;
+        survive("mutated EPS text document", || vectorz_eps::import(&bytes).ok().map(|r| r.document))?;
     }
 
     /// The same for area type threaded through frames and type on a path, opened as a document
@@ -1910,7 +1910,7 @@ proptest! {
     fn eps_text_frames_never_panic(cut in 0usize..2_500, edits in prop::collection::vec((0usize..2_500, prop::sample::select(vec!['0', '9', '-', '.', ' ', '\n', '(', ')', '/', '[', ']', '<', '>', '\\', 'e', '1', '2'])), 0..12)) {
         let text = mutate_text(&frames_document_text(), cut, &edits);
         let bytes = text_eps_of(&text, FRAME_OBJECTS);
-        survive("mutated EPS text frames", || vectorcraft_engine::cmd::fileio::load("x.eps", &bytes).ok().map(|l| l.doc))?;
+        survive("mutated EPS text frames", || vectorz_engine::cmd::fileio::load("x.eps", &bytes).ok().map(|l| l.doc))?;
     }
 
     /// An Illustrator EPS whose editing data is damaged or hostile: read as its layers, or as its page.
@@ -1918,7 +1918,7 @@ proptest! {
     fn eps_editing_data_never_panics(cut in 0usize..3_000, edits in prop::collection::vec((0usize..3_000, prop::sample::select(vec!['0', '9', '-', '.', ' ', '\n', '(', ')', '/', ':', ';', '[', ']', '%', 'q', 'Q', 'W', 'u', 'U', 'L', 'k', 'x'])), 0..12)) {
         let text = mutate_text(&editing_text(), cut, &edits);
         let bytes = editing_eps(&text);
-        survive("mutated EPS editing data", || vectorcraft_eps::import(&bytes).ok().map(|r| r.document))?;
+        survive("mutated EPS editing data", || vectorz_eps::import(&bytes).ok().map(|r| r.document))?;
     }
 
     /// A `.ai` whose editing data is damaged or hostile.
@@ -1932,7 +1932,7 @@ proptest! {
                 *x = b;
             }
         }
-        survive("mutated .ai editing data", || Some(vectorcraft_eps::layered_ai(&private, Document::new(100.0, 100.0), vec![], false, false).0))?;
+        survive("mutated .ai editing data", || Some(vectorz_eps::layered_ai(&private, Document::new(100.0, 100.0), vec![], false, false).0))?;
     }
 }
 
@@ -1947,7 +1947,7 @@ const NAMED_PROLOG_AI: &str = "%!PS-Adobe-3.0\n%%BoundingBox: 0 0 200 100\n%%Doc
 /// The fixture, as it is, opens with its layer and sublayer.
 #[test]
 fn the_named_prolog_fixture_opens_with_its_layers() {
-    let l = vectorcraft_engine::cmd::fileio::load("x.ai", NAMED_PROLOG_AI.as_bytes()).unwrap();
+    let l = vectorz_engine::cmd::fileio::load("x.ai", NAMED_PROLOG_AI.as_bytes()).unwrap();
     let names: Vec<_> = l.doc.layers.iter().map(|l| l.name.clone()).collect();
     assert_eq!(names, [Some("A::B".to_string())], "{:?}", l.warnings);
     assert_eq!(l.doc.layers[0].children().unwrap().len(), 3);
@@ -1961,7 +1961,7 @@ proptest! {
     #[test]
     fn ps_form_ai_never_panics(cut in 0usize..1_200, edits in prop::collection::vec((0usize..1_200, prop::sample::select(vec!['0', '9', '-', '.', ' ', '\n', '(', ')', '/', '[', ']', '%', 'u', 'U', 'L', 'b', 'B', 'i', 'A', 'K'])), 0..12)) {
         let text = mutate_text(NAMED_PROLOG_AI, cut, &edits);
-        survive("mutated PostScript-form .ai", || vectorcraft_engine::cmd::fileio::load("x.ai", text.as_bytes()).ok().map(|l| l.doc))?;
+        survive("mutated PostScript-form .ai", || vectorz_engine::cmd::fileio::load("x.ai", text.as_bytes()).ok().map(|l| l.doc))?;
     }
 }
 
@@ -2169,7 +2169,7 @@ fn arb_ai_token() -> impl Strategy<Value = String> {
 
 /// The testkit's sample editing data, compressed as older `.ai` files compress it.
 fn ai_sample_compressed() -> Vec<u8> {
-    [&b"%AI12_CompressedData"[..], &deflated(&vectorcraft_testkit::ai::sample_data())].concat()
+    [&b"%AI12_CompressedData"[..], &deflated(&vectorz_testkit::ai::sample_data())].concat()
 }
 
 /// `data` compressed (zlib).
@@ -2187,22 +2187,22 @@ proptest! {
     /// operands, sections and dictionaries left open, images of any size.
     #[test]
     fn ai_hostile_editing_data_never_panics(tokens in prop::collection::vec(arb_ai_token(), 0..80)) {
-        use vectorcraft_testkit::ai;
+        use vectorz_testkit::ai;
         let data = ai::editing_data(200.0, 100.0, &format!("%AI5_BeginLayer\n1 1 1 1 0 0 1 0 79 128 255 0 50 0 Lb\n(L) Ln\n{}\nLB\n", tokens.join(" ")));
-        survive("hostile editing data", || Some(vectorcraft_eps::layered_ai(data.as_bytes(), Document::new(200.0, 100.0), vec![], false, false).0))?;
-        survive("hostile editing data, type as outlines", || Some(vectorcraft_eps::layered_ai(data.as_bytes(), Document::new(200.0, 100.0), vec![], true, false).0))?;
-        survive("hostile editing data, trusted", || Some(vectorcraft_eps::layered_ai(data.as_bytes(), Document::new(200.0, 100.0), vec![], false, true).0))?;
+        survive("hostile editing data", || Some(vectorz_eps::layered_ai(data.as_bytes(), Document::new(200.0, 100.0), vec![], false, false).0))?;
+        survive("hostile editing data, type as outlines", || Some(vectorz_eps::layered_ai(data.as_bytes(), Document::new(200.0, 100.0), vec![], true, false).0))?;
+        survive("hostile editing data, trusted", || Some(vectorz_eps::layered_ai(data.as_bytes(), Document::new(200.0, 100.0), vec![], false, true).0))?;
         let eps = ai::eps(data.as_bytes(), ai::page_ps());
-        survive("hostile editing data in an EPS", || vectorcraft_engine::cmd::fileio::load("x.eps", &eps).ok().map(|l| l.doc))?;
+        survive("hostile editing data in an EPS", || vectorz_engine::cmd::fileio::load("x.eps", &eps).ok().map(|l| l.doc))?;
         // An EPS whose page is its art's box, not its artboard: what prints outside it is compared too.
         let boxed = ai::eps(data.replace("%AI3_Cropmarks: 0 0 200 100", "%AI3_Cropmarks: -50 -50 300 200").as_bytes(), ai::page_ps());
-        survive("hostile editing data in an EPS of its art's box", || vectorcraft_engine::cmd::fileio::load("x.eps", &boxed).ok().map(|l| l.doc))?;
+        survive("hostile editing data in an EPS of its art's box", || vectorz_engine::cmd::fileio::load("x.eps", &boxed).ok().map(|l| l.doc))?;
     }
 
     /// The testkit's sample damaged, as it is and compressed, in EPS, `.ai` and PDF files.
     #[test]
     fn ai_mutated_sample_never_panics(cut in 0usize..4_000, edits in prop::collection::vec((0usize..4_000, any::<u8>()), 0..12)) {
-        use vectorcraft_testkit::ai;
+        use vectorz_testkit::ai;
         static PLAIN: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
         static PACKED: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
         for (what, sample) in [("editing data", PLAIN.get_or_init(ai::sample_data)), ("compressed editing data", PACKED.get_or_init(ai_sample_compressed))] {
@@ -2213,11 +2213,11 @@ proptest! {
             }
             bytes.truncate(cut.max(4));
             let file = ai::ai(&bytes, ai::page_pdf());
-            survive(what, || vectorcraft_engine::cmd::fileio::load("x.ai", &file).ok().map(|l| l.doc))?;
+            survive(what, || vectorz_engine::cmd::fileio::load("x.ai", &file).ok().map(|l| l.doc))?;
             let file = ai::pdf(&bytes, ai::page_pdf());
-            survive(what, || vectorcraft_engine::cmd::fileio::load("x.pdf", &file).ok().map(|l| l.doc))?;
+            survive(what, || vectorz_engine::cmd::fileio::load("x.pdf", &file).ok().map(|l| l.doc))?;
             let file = ai::eps(&bytes, ai::page_ps());
-            survive(what, || vectorcraft_engine::cmd::fileio::load("x.eps", &file).ok().map(|l| l.doc))?;
+            survive(what, || vectorz_engine::cmd::fileio::load("x.eps", &file).ok().map(|l| l.doc))?;
         }
     }
 }
@@ -2228,7 +2228,7 @@ proptest! {
 /// `OS/2` tables of the bundled Source Sans 3 renamed "Findme Sans 3", and an `fvar` table with a
 /// weight axis and three named instances (named by name ids 2, 1 and 4).
 fn search_font() -> Vec<u8> {
-    let font = vectorcraft_testkit::fonts::renamed("Findme Sans 3");
+    let font = vectorz_testkit::fonts::renamed("Findme Sans 3");
     let be32 = |at: usize| u32::from_be_bytes(font[at..at + 4].try_into().unwrap()) as usize;
     let table = |tag: &[u8; 4]| {
         let n = u16::from_be_bytes([font[4], font[5]]) as usize;
@@ -2295,9 +2295,9 @@ fn search_collection(font: &[u8], faces: u32) -> Vec<u8> {
 
 /// The fonts a search for "Findme Sans 3" looks for: the face, and a style of the family as if the
 /// family were installed.
-fn findme_wanted() -> vectorcraft_text::WantedFonts {
-    use vectorcraft_text::WantedFont;
-    vectorcraft_text::WantedFonts::new(&[
+fn findme_wanted() -> vectorz_text::WantedFonts {
+    use vectorz_text::WantedFont;
+    vectorz_text::WantedFonts::new(&[
         WantedFont { family: "Findme Sans 3".into(), style: "Regular".into(), installed: None },
         WantedFont { family: "FINDME SANS 3".into(), style: "Black".into(), installed: Some("Findme Sans 3".into()) },
         WantedFont { family: "SourceSans3-Regular".into(), style: "Bold".into(), installed: None },
@@ -2306,7 +2306,7 @@ fn findme_wanted() -> vectorcraft_text::WantedFonts {
 
 /// Whether reading `bytes` as a font file a search reads panics.
 fn search_reads(what: &str, bytes: &[u8]) -> Result<Vec<usize>, TestCaseError> {
-    let path = vectorcraft_testkit::temp_dir("font-search-fuzz").join(format!("{:?}.ttc", std::thread::current().id()));
+    let path = vectorz_testkit::temp_dir("font-search-fuzz").join(format!("{:?}.ttc", std::thread::current().id()));
     std::fs::write(&path, bytes).unwrap();
     catch_quiet(|| findme_wanted().provided_by(&path)).map_err(|e| TestCaseError::fail(format!("{what}: a search reading the file panicked: {e}")))
 }
@@ -2413,7 +2413,7 @@ const SCRIPT_PIECES: &[&str] = &[
 
 /// `script.check` with `p`, which mustn't panic, and whose lists keep to their limit.
 fn checked(what: &str, p: Value) -> Result<(), TestCaseError> {
-    let r = catch_quiet(|| no_panic(vectorcraft_engine::Session::new().execute("script.check", &p)))
+    let r = catch_quiet(|| no_panic(vectorz_engine::Session::new().execute("script.check", &p)))
         .map_err(|e| TestCaseError::fail(format!("{what}: script.check panicked: {e}")))?;
     if let Ok(r) = r {
         for list in [&r["targets"], &r["directives"], &r["includes"], &r["problems"], &r["dom"]["members"], &r["menuCommands"]["strings"]] {
@@ -2426,7 +2426,7 @@ fn checked(what: &str, p: Value) -> Result<(), TestCaseError> {
 /// The sample the properties mutate reaches every part of the check.
 #[test]
 fn the_script_sample_is_checked_whole() {
-    let r = vectorcraft_engine::Session::new().execute("script.check", &json!({"data": SCRIPT_SAMPLE})).unwrap();
+    let r = vectorz_engine::Session::new().execute("script.check", &json!({"data": SCRIPT_SAMPLE})).unwrap();
     assert_eq!(r["kind"], "script");
     assert_eq!(r["needs"], json!(["language", "dom", "files", "menuCommands", "dialogs", "hostOnly"]));
     assert_eq!(r["problems"], json!([]));
@@ -2438,7 +2438,7 @@ proptest! {
     #[test]
     fn script_garbage_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..2_000), compiled in any::<bool>()) {
         let name = if compiled { "garbage.jsxbin" } else { "garbage.jsx" };
-        checked("script garbage", json!({"dataBase64": vectorcraft_format::base64_encode(&bytes), "name": name}))?;
+        checked("script garbage", json!({"dataBase64": vectorz_format::base64_encode(&bytes), "name": name}))?;
     }
 
     #[test]
@@ -2454,7 +2454,7 @@ proptest! {
             bytes[at % n] = b;
         }
         bytes.truncate(cut);
-        checked("mutated script", json!({"dataBase64": vectorcraft_format::base64_encode(&bytes), "name": "sample.jsx"}))?;
+        checked("mutated script", json!({"dataBase64": vectorz_format::base64_encode(&bytes), "name": "sample.jsx"}))?;
     }
 }
 
@@ -2465,7 +2465,7 @@ proptest! {
 // `MAX_DEPTH`. These run on a thread with the stack of a Windows main thread (1 MB), where an
 // overflow ends the test run.
 
-use vectorcraft_doc::MAX_DEPTH;
+use vectorz_doc::MAX_DEPTH;
 
 /// `f` on a thread with a 1 MB stack.
 fn on_a_small_stack(f: impl FnOnce() + Send + 'static) {
@@ -2475,7 +2475,7 @@ fn on_a_small_stack(f: impl FnOnce() + Send + 'static) {
 /// Open `bytes` as the file `name`: an error, or a document within the cap that renders and
 /// exports. Returns the document and the import's warnings.
 fn open_deep(name: &str, bytes: &[u8]) -> Option<(Document, Vec<String>)> {
-    let loaded = vectorcraft_engine::cmd::fileio::load(name, bytes).ok()?;
+    let loaded = vectorz_engine::cmd::fileio::load(name, bytes).ok()?;
     assert!(!loaded.doc.too_deep(None), "{name}: deeper than the cap");
     let doc = loaded.doc.clone();
     survive(name, move || Some(doc)).unwrap();
@@ -2510,13 +2510,13 @@ fn deeply_nested_svg_is_refused_or_merged() {
         let (_, warnings) = open_deep("shallow.svg", nested_svg(20).as_bytes()).expect("20 groups open");
         assert!(!merged(&warnings), "{warnings:?}");
         // As deep as the reader goes (on a stack of its own): opened and merged the same.
-        let most = vectorcraft_svg::MAX_ELEMENT_DEPTH;
+        let most = vectorz_svg::MAX_ELEMENT_DEPTH;
         let (doc, warnings) = open_deep("deepest.svg", nested_svg(most - 2).as_bytes()).expect("opens at the reader's cap");
         assert!(merged(&warnings), "{warnings:?}");
         assert_eq!(paths_in(&doc), most - 1, "no art is lost");
         // Past it: an error that says why, whatever the depth.
         for n in [most, 2 * most, 200_000] {
-            let e = vectorcraft_engine::cmd::fileio::load("deep.svg", nested_svg(n).as_bytes()).err().expect("refused").to_string();
+            let e = vectorz_engine::cmd::fileio::load("deep.svg", nested_svg(n).as_bytes()).err().expect("refused").to_string();
             assert!(e.contains(&format!("nested more than {most} deep")), "{n}: {e}");
         }
         // Unnamed groups of one object aren't kept, but usvg walks them all the same.
@@ -2533,10 +2533,10 @@ fn deeply_nested_svg_is_refused_or_merged() {
         );
         assert!(open_deep("chain.svg", chain.as_bytes()).is_none());
         // Placed and pasted, as opened.
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         s.execute("file.new", &json!({"width": 300, "height": 200})).unwrap();
         for n in [40, 2 * most] {
-            let p = json!({"name": "deep.svg", "dataBase64": vectorcraft_format::base64_encode(nested_svg(n).as_bytes())});
+            let p = json!({"name": "deep.svg", "dataBase64": vectorz_format::base64_encode(nested_svg(n).as_bytes())});
             let _ = no_panic(s.execute("file.place", &p));
             let _ = no_panic(s.execute("clipboard.importSvg", &json!({"svg": nested_svg(n)})));
             let _ = no_panic(s.execute("edit.paste", &json!({})));
@@ -2650,9 +2650,9 @@ fn open_each(name: &str, files: impl IntoIterator<Item = Vec<u8>> + Send + 'stat
             open_deep(&format!("{name}-{i}.pdf"), &bytes);
             // As `.ai` (the PDF part of one) and placed, too.
             open_deep(&format!("{name}-{i}.ai"), &bytes);
-            let mut s = vectorcraft_engine::Session::new();
+            let mut s = vectorz_engine::Session::new();
             s.execute("file.new", &json!({"width": 300, "height": 200})).unwrap();
-            let _ = no_panic(s.execute("file.place", &json!({"name": "deep.pdf", "dataBase64": vectorcraft_format::base64_encode(&bytes)})));
+            let _ = no_panic(s.execute("file.place", &json!({"name": "deep.pdf", "dataBase64": vectorz_format::base64_encode(&bytes)})));
             assert!(!s.doc().unwrap().doc.too_deep(None));
         }
     });
@@ -2718,7 +2718,7 @@ fn pdf_nesting_inside_an_object_stream() {
             pdf_with_object_stream("[0 0 100 100]", "/Extends 5 0 R"),
         ],
     );
-    let plain = vectorcraft_engine::cmd::fileio::load("plain.pdf", &pdf_with_object_stream("[0 0 120 80]", "")).expect("an object stream is read");
+    let plain = vectorz_engine::cmd::fileio::load("plain.pdf", &pdf_with_object_stream("[0 0 120 80]", "")).expect("an object stream is read");
     assert_eq!(plain.doc.artboards[0].rect.width(), 120.0);
 }
 
@@ -2841,7 +2841,7 @@ fn pdf_streams_the_reader_would_fail_on_are_refused() {
     on_a_small_stack(move || {
         for (what, bytes) in &files {
             for name in ["hostile.pdf", "hostile.ai"] {
-                let e = vectorcraft_engine::cmd::fileio::load(name, bytes).err().map(|e| e.to_string());
+                let e = vectorz_engine::cmd::fileio::load(name, bytes).err().map(|e| e.to_string());
                 assert!(e.as_deref().is_some_and(|e| e.contains("would decode to more than 256 MB")), "{what} as {name}: {e:?}");
             }
         }
@@ -2849,7 +2849,7 @@ fn pdf_streams_the_reader_would_fail_on_are_refused() {
     // Within range, the same files open.
     let fine = "/DecodeParms << /Predictor 1 /Columns 0 >>";
     for bytes in [form(fine, "0 0 5 5 re f"), deep_pdf(&inline("<< /Predictor 1 >>"), "<< >>")] {
-        vectorcraft_engine::cmd::fileio::load("fine.pdf", &bytes).expect("opens");
+        vectorz_engine::cmd::fileio::load("fine.pdf", &bytes).expect("opens");
     }
 }
 
@@ -2957,7 +2957,7 @@ fn dxf_blocks_inserting_themselves_are_left_out() {
 
 #[test]
 fn deeply_nested_affinity_groups_are_read_within_the_cap() {
-    use vectorcraft_affinity::synth::{self, F, Method, tag};
+    use vectorz_affinity::synth::{self, F, Method, tag};
     // Groups in groups: within what the reader takes, past its cap on layers (128), past its cap
     // on the stream's own nesting (384), and far past both.
     let files: Vec<Vec<u8>> = [20u32, 120, 180, 370, 2000]
@@ -2996,11 +2996,11 @@ fn deeply_nested_plugin_manifests_and_output_are_errors() {
     on_a_small_stack(|| {
         // (A manifest may be 64 kB.)
         let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
-        assert!(vectorcraft_plugins::Manifest::parse(deep(30_000).as_bytes()).is_err());
-        assert!(vectorcraft_plugins::Manifest::parse(format!("{{\"params\": {}}}", deep(30_000)).as_bytes()).is_err());
+        assert!(vectorz_plugins::Manifest::parse(deep(30_000).as_bytes()).is_err());
+        assert!(vectorz_plugins::Manifest::parse(format!("{{\"params\": {}}}", deep(30_000)).as_bytes()).is_err());
         let deep = deep(100_000);
         for output in [deep.clone(), format!("{{\"objects\": {deep}}}"), format!("{{\"objects\": [{{\"kind\": \"path\", \"path\": {deep}}}]}}")] {
-            assert!(vectorcraft_plugins::objects::decode(output.as_bytes()).is_err());
+            assert!(vectorz_plugins::objects::decode(output.as_bytes()).is_err());
         }
     });
 }
@@ -3011,13 +3011,13 @@ fn deeply_nested_plugin_manifests_and_output_are_errors() {
 /// an instance of the symbol; that instance inside as many groups as a file holds; a square
 /// painted with the pattern. So what the brush draws is drawn with the brush.
 fn brushed_document(kind: usize, art: usize) -> Document {
-    use vectorcraft_brush::{ArtBrush, Brush, BrushKind, PatternBrush, Scatter};
-    use vectorcraft_color::Paint;
-    use vectorcraft_doc::{Appearance, AppearanceItem, Node, NodeKind, PatternDef, Symbol};
+    use vectorz_brush::{ArtBrush, Brush, BrushKind, PatternBrush, Scatter};
+    use vectorz_color::Paint;
+    use vectorz_doc::{Appearance, AppearanceItem, Node, NodeKind, PatternDef, Symbol};
     let mut doc = nested_document(1);
-    let square = || vectorcraft_geom::shapes::rectangle(vectorcraft_geom::Rect::new(0.0, 0.0, 60.0, 20.0));
+    let square = || vectorz_geom::shapes::rectangle(vectorz_geom::Rect::new(0.0, 0.0, 60.0, 20.0));
     let brushed = |doc: &mut Document| {
-        let mut look = Appearance::basic(Paint::None, Paint::solid(vectorcraft_color::Color::rgb8(0, 0, 0)), 4.0);
+        let mut look = Appearance::basic(Paint::None, Paint::solid(vectorz_color::Color::rgb8(0, 0, 0)), 4.0);
         for item in &mut look.items {
             if let AppearanceItem::Stroke(s) = item {
                 s.brush = Some("loop".into());
@@ -3026,9 +3026,9 @@ fn brushed_document(kind: usize, art: usize) -> Document {
         Node::path(doc.alloc_id(), square(), look)
     };
     let instance =
-        |doc: &mut Document| Node::new(doc.alloc_id(), NodeKind::SymbolInstance { symbol: "s0".into(), xf: vectorcraft_geom::Affine::IDENTITY });
+        |doc: &mut Document| Node::new(doc.alloc_id(), NodeKind::SymbolInstance { symbol: "s0".into(), xf: vectorz_geom::Affine::IDENTITY });
     let painted = |doc: &mut Document| {
-        let fill = Paint::Pattern { pattern: "p0".into(), xf: vectorcraft_geom::Affine::IDENTITY };
+        let fill = Paint::Pattern { pattern: "p0".into(), xf: vectorz_geom::Affine::IDENTITY };
         Node::path(doc.alloc_id(), square(), Appearance::basic(fill, Paint::None, 0.0))
     };
     let (in_symbol, in_pattern) = (brushed(&mut doc), brushed(&mut doc));
@@ -3044,7 +3044,7 @@ fn brushed_document(kind: usize, art: usize) -> Document {
         1 => BrushKind::Scatter(Scatter { art, ..Default::default() }),
         _ => BrushKind::Pattern(PatternBrush { side: art.clone(), start: Some(art), ..Default::default() }),
     };
-    vectorcraft_brush::store(&mut doc, &[Brush { name: "loop".into(), kind }]);
+    vectorz_brush::store(&mut doc, &[Brush { name: "loop".into(), kind }]);
     let layer = doc.layers[0].id;
     for on_layer in [instance(&mut doc), painted(&mut doc), brushed(&mut doc)] {
         doc.insert(Some(layer), usize::MAX, on_layer).unwrap();
@@ -3054,8 +3054,8 @@ fn brushed_document(kind: usize, art: usize) -> Document {
 
 /// `doc` saved, opened again, drawn, exported and edited: nothing overflows.
 fn art_by_name_survives(what: &str, doc: Document) {
-    let (back, _) = open_deep("named.vectorcraft", &vectorcraft_format::save_file(&doc)).expect("opens");
-    let mut s = vectorcraft_engine::Session::new();
+    let (back, _) = open_deep("named.vectorz", &vectorz_format::save_file(&doc)).expect("opens");
+    let mut s = vectorz_engine::Session::new();
     s.add_document(back, None);
     for (cmd, p) in [
         ("select.all", json!({})),
@@ -3105,10 +3105,10 @@ brushes_drawn_with_themselves! {
 
 #[test]
 fn a_graph_design_of_deep_art_and_of_a_symbol_holding_itself_is_drawn() {
-    use vectorcraft_doc::{GraphDesign, Node, NodeKind};
+    use vectorz_doc::{GraphDesign, Node, NodeKind};
     on_a_small_stack(|| {
         let mut doc = symbols_document(1, 1, "s0");
-        let instance = Node::new(doc.alloc_id(), NodeKind::SymbolInstance { symbol: "s0".into(), xf: vectorcraft_geom::Affine::IDENTITY });
+        let instance = Node::new(doc.alloc_id(), NodeKind::SymbolInstance { symbol: "s0".into(), xf: vectorz_geom::Affine::IDENTITY });
         let art = (0..MAX_DEPTH + 4).fold(instance, |inner, _| Node::group(doc.alloc_id(), vec![std::sync::Arc::new(inner)]));
         doc.graph_designs.push(GraphDesign { name: "deep".into(), art: std::sync::Arc::new(art) });
         art_by_name_survives("a graph design of deep art", doc);
@@ -3118,11 +3118,11 @@ fn a_graph_design_of_deep_art_and_of_a_symbol_holding_itself_is_drawn() {
 /// A layer holding `levels` groups in one another around a rectangle, each with a second
 /// rectangle beside the next: `levels + 2` deep.
 fn nested_document(levels: usize) -> Document {
-    use vectorcraft_doc::Node;
-    use vectorcraft_testkit::fixtures::DocBuilder;
+    use vectorz_doc::Node;
+    use vectorz_testkit::fixtures::DocBuilder;
     let mut b = DocBuilder::new(100.0, 100.0);
     let rect =
-        |b: &mut DocBuilder, x: f64| b.rect_node(vectorcraft_geom::Rect::new(x, 0.0, x + 10.0, 10.0), vectorcraft_color::Color::rgb8(200, 0, 0));
+        |b: &mut DocBuilder, x: f64| b.rect_node(vectorz_geom::Rect::new(x, 0.0, x + 10.0, 10.0), vectorz_color::Color::rgb8(200, 0, 0));
     let mut inner = rect(&mut b, 0.0);
     for _ in 0..levels {
         let beside = rect(&mut b, 20.0);
@@ -3138,16 +3138,16 @@ fn a_document_at_the_cap_saves_opens_and_exports() {
     on_a_small_stack(|| {
         let doc = nested_document(MAX_DEPTH - 2);
         assert!(!doc.too_deep(None));
-        let back = vectorcraft_format::load_file(&vectorcraft_format::save_file(&doc)).expect("what can be made opens again");
+        let back = vectorz_format::load_file(&vectorz_format::save_file(&doc)).expect("what can be made opens again");
         assert!(back.depth_notes.is_empty());
         assert_eq!(back.doc.layers, doc.layers);
         survive("at the cap", || Some(doc.clone())).unwrap();
         // Every format that keeps the nesting reads its own file back within the cap.
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         s.add_document(doc, None);
         for format in ["svg", "pdf", "eps", "ai"] {
             let r = s.execute("document.export", &json!({"format": format})).unwrap();
-            let bytes = vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap();
+            let bytes = vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap();
             open_deep(&format!("cap.{format}"), &bytes).unwrap_or_else(|| panic!("{format} opens"));
         }
         for cmd in ["select.all", "document.inspect", "document.info", "edit.copy", "edit.paste", "object.ungroup", "edit.undo"] {
@@ -3160,18 +3160,18 @@ fn a_document_at_the_cap_saves_opens_and_exports() {
 fn a_native_file_nested_too_deep_is_merged_or_refused() {
     on_a_small_stack(|| {
         // Saved before the cap by a version that could still open it: opened, the deepest merged.
-        let old = vectorcraft_format::save_file(&nested_document(MAX_DEPTH + 2));
-        let (doc, warnings) = open_deep("old.vectorcraft", &old).expect("opens");
+        let old = vectorz_format::save_file(&nested_document(MAX_DEPTH + 2));
+        let (doc, warnings) = open_deep("old.vectorz", &old).expect("opens");
         assert!(merged(&warnings), "{warnings:?}");
         assert_eq!(paths_in(&doc), MAX_DEPTH + 3, "no art is lost");
         // Deeper than any version could open, and a hostile file: an error that says why. Written
         // by hand: a tree this deep can't be built and saved.
-        let text = String::from_utf8(vectorcraft_format::save(&nested_document(0), false)).unwrap();
+        let text = String::from_utf8(vectorz_format::save(&nested_document(0), false)).unwrap();
         let (open, close) = ("{\"id\":900000,\"kind\":{\"type\":\"group\",\"children\":[", "]}}");
         let at = text.find("\"children\":[").expect("the layer's children") + "\"children\":[".len();
         for levels in [100, 50_000] {
             let deep = format!("{}{}{},{}", &text[..at], open.repeat(levels), close.repeat(levels), &text[at..]);
-            let e = vectorcraft_engine::cmd::fileio::load("deep.vectorcraft", deep.as_bytes()).err().expect("refused").to_string();
+            let e = vectorz_engine::cmd::fileio::load("deep.vectorz", deep.as_bytes()).err().expect("refused").to_string();
             assert!(e.contains("nested too deep"), "{levels}: {e}");
         }
     });
@@ -3180,7 +3180,7 @@ fn a_native_file_nested_too_deep_is_merged_or_refused() {
 #[test]
 fn commands_cannot_nest_deeper_than_the_cap() {
     on_a_small_stack(|| {
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
         s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap();
         s.execute("select.all", &json!({})).unwrap();
@@ -3188,7 +3188,7 @@ fn commands_cannot_nest_deeper_than_the_cap() {
         for _ in 0..10_000 {
             match no_panic(s.execute("object.group", &json!({}))) {
                 Ok(_) => grouped += 1,
-                Err(e) => assert!(e.to_string().contains(vectorcraft_engine::TOO_DEEP), "after {grouped} groups: {e}"),
+                Err(e) => assert!(e.to_string().contains(vectorz_engine::TOO_DEEP), "after {grouped} groups: {e}"),
             }
         }
         // The layer, the groups and the rectangle.
@@ -3211,9 +3211,9 @@ fn commands_cannot_nest_deeper_than_the_cap() {
 /// A document whose one object is an instance of the first of `count` symbols: each symbol's art
 /// is `levels` groups around an instance of the next symbol, the last one of `last`.
 fn symbols_document(count: usize, levels: usize, last: &str) -> Document {
-    use vectorcraft_doc::{Node, NodeKind, Symbol};
+    use vectorz_doc::{Node, NodeKind, Symbol};
     let instance =
-        |doc: &mut Document, of: String| Node::new(doc.alloc_id(), NodeKind::SymbolInstance { symbol: of, xf: vectorcraft_geom::Affine::IDENTITY });
+        |doc: &mut Document, of: String| Node::new(doc.alloc_id(), NodeKind::SymbolInstance { symbol: of, xf: vectorz_geom::Affine::IDENTITY });
     let mut doc = nested_document(1);
     for i in 0..count {
         let mut art = instance(&mut doc, if i + 1 < count { format!("s{}", i + 1) } else { last.to_string() });
@@ -3231,9 +3231,9 @@ fn symbols_document(count: usize, levels: usize, last: &str) -> Document {
 /// `doc` saved (as an older version, or a hostile file, could have) and opened again: within the
 /// caps (`kept`: as it was), drawn, exported and edited.
 fn symbols_survive(what: &str, doc: Document, kept: bool) {
-    let (back, warnings) = open_deep("symbols.vectorcraft", &vectorcraft_format::save_file(&doc)).expect("opens");
+    let (back, warnings) = open_deep("symbols.vectorz", &vectorz_format::save_file(&doc)).expect("opens");
     assert_eq!(!warnings.iter().any(|w| w.contains("symbol instances")), kept, "{what}: {warnings:?}");
-    let mut s = vectorcraft_engine::Session::new();
+    let mut s = vectorz_engine::Session::new();
     s.add_document(back, None);
     for cmd in [
         "select.all",
@@ -3268,7 +3268,7 @@ fn symbols_in_symbols_are_drawn_only_so_deep() {
         symbols_survive("symbols at the cap", symbols_document(3, MAX_DEPTH - 2, "none"), true);
         symbols_survive("symbols in symbols", symbols_document(40, MAX_DEPTH - 1, "none"), false);
         // A symbol can't be made to hold itself, or one that holds it, by editing either.
-        let mut s = vectorcraft_engine::Session::new();
+        let mut s = vectorz_engine::Session::new();
         s.add_document(symbols_document(2, 1, "none"), None);
         s.execute("select.all", &json!({})).unwrap();
         for (cmd, p) in [
@@ -3286,12 +3286,12 @@ fn symbols_in_symbols_are_drawn_only_so_deep() {
 #[test]
 fn a_pattern_painting_its_own_tile_opens_without_the_paint() {
     on_a_small_stack(|| {
-        use vectorcraft_color::Paint;
-        use vectorcraft_doc::{Appearance, PatternDef};
+        use vectorz_color::Paint;
+        use vectorz_doc::{Appearance, PatternDef};
         let painted = |doc: &mut Document, with: &str| {
-            let fill = Paint::Pattern { pattern: with.into(), xf: vectorcraft_geom::Affine::IDENTITY };
-            let square = vectorcraft_geom::shapes::rectangle(vectorcraft_geom::Rect::new(0.0, 0.0, 20.0, 20.0));
-            vectorcraft_doc::Node::path(doc.alloc_id(), square, Appearance::basic(fill, Paint::None, 0.0))
+            let fill = Paint::Pattern { pattern: with.into(), xf: vectorz_geom::Affine::IDENTITY };
+            let square = vectorz_geom::shapes::rectangle(vectorz_geom::Rect::new(0.0, 0.0, 20.0, 20.0));
+            vectorz_doc::Node::path(doc.alloc_id(), square, Appearance::basic(fill, Paint::None, 0.0))
         };
         // One pattern painting its own tile, and two painting each other's.
         for names in [["p", "p"], ["p", "q"]] {

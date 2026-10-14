@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::{DialogSpec, form, run_and_close};
 use crate::state::Dialog;
-use crate::{VectorcraftApp, widgets};
+use crate::{VectorzApp, widgets};
 
 /// The dialog kinds.
 pub const DESIGN: &str = "graphDesign";
@@ -44,7 +44,7 @@ pub(super) const MARKER_SPEC: DialogSpec = DialogSpec {
 };
 
 /// Open Graph Design.
-pub fn open_design(app: &mut VectorcraftApp) -> Result<Value, String> {
+pub fn open_design(app: &mut VectorzApp) -> Result<Value, String> {
     let names = names(app)?;
     let first: Vec<String> = names.first().cloned().into_iter().collect();
     let name = first.first().cloned().unwrap_or_default();
@@ -53,14 +53,14 @@ pub fn open_design(app: &mut VectorcraftApp) -> Result<Value, String> {
 }
 
 /// Open Marker for the selected graph series, on the design they draw with (None for the default).
-pub fn open_marker(app: &mut VectorcraftApp) -> Result<Value, String> {
+pub fn open_marker(app: &mut VectorzApp) -> Result<Value, String> {
     let v = app.session.execute("graph.marker", &json!({})).map_err(|e| e.to_string())?;
     app.ui.dialog = Some(Dialog::new(MARKER, json!({ "selected": v["design"].as_str() })));
     Ok(Value::Null)
 }
 
 /// The document's design names, read from the document (the dialogs draw every frame).
-fn names(app: &VectorcraftApp) -> Result<Vec<String>, String> {
+fn names(app: &VectorzApp) -> Result<Vec<String>, String> {
     let st = app.session.active().ok_or("no document open")?;
     Ok(st.doc.graph_designs.iter().map(|d| d.name.clone()).collect())
 }
@@ -76,11 +76,11 @@ fn select(d: &mut Dialog, names: Vec<String>) {
 }
 
 /// A design's art drawn in `r` (cached by the art's identity).
-fn preview(ui: &egui::Ui, app: &VectorcraftApp, name: &str, r: egui::Rect) {
+fn preview(ui: &egui::Ui, app: &VectorzApp, name: &str, r: egui::Rect) {
     use std::cell::RefCell;
     use std::collections::HashMap;
     thread_local! {
-        static RENDERER: RefCell<vectorcraft_render::Renderer> = RefCell::new(vectorcraft_render::Renderer::new());
+        static RENDERER: RefCell<vectorz_render::Renderer> = RefCell::new(vectorz_render::Renderer::new());
         static CACHE: crate::graphics::TexCache<HashMap<usize, egui::TextureHandle>> = crate::graphics::TexCache::default();
     }
     let Some(st) = app.session.active() else { return };
@@ -105,7 +105,7 @@ fn preview(ui: &egui::Ui, app: &VectorcraftApp, name: &str, r: egui::Rect) {
     }
 }
 
-fn design_body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn design_body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let names = names(app).unwrap_or_default();
     let chosen: Vec<String> = selected(d).into_iter().filter(|n| names.contains(n)).collect();
     let one = chosen.first().cloned();
@@ -190,7 +190,7 @@ fn design_body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> b
     false
 }
 
-fn marker_body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn marker_body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let names = names(app).unwrap_or_default();
     // A list as wide as Graph Design's, not the whole window.
     ui.set_width(220.0);
@@ -216,18 +216,18 @@ fn marker_body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> b
 mod tests {
     use serde_json::json;
 
-    use crate::VectorcraftApp;
+    use crate::VectorzApp;
     use crate::state::Dialog;
 
-    fn frame(app: &mut VectorcraftApp) {
+    fn frame(app: &mut VectorzApp) {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::super::show(app, ui.ctx()));
         out.textures_delta.clear();
     }
 
-    fn app_with_design() -> VectorcraftApp {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+    fn app_with_design() -> VectorzApp {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         let r = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap()["id"].as_u64().unwrap();
         app.run("select.set", json!({"ids": [r]})).unwrap();

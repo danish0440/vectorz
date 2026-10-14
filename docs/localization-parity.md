@@ -2,7 +2,7 @@
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Polish: the rows added by the maintainers confirmed by the Polish translator, #1614; tool flyouts fit their translated names, #1616; scores and estimates unchanged; Polish: 4,510 rows counted in the catalog (the row said 4,492), #1498; French: 423 strings added since the catalog was measured and 188 entries reworded, #1511; Hungarian: one message in the informal address, #1474; scores and estimates unchanged; Vietnamese catalog added, complete under the tests; 12-language score 63% → 71%; Czech: 128 strings added since the catalog was completed are translated, #1461; scores and estimates unchanged; Korean catalog added, complete under the tests; 12-language score 54% → 63%; Hungarian catalog added; Czech render-site localization follow-up; scores and estimates unchanged) · **Target:** Adobe Illustrator 2026 (30.x)
 
-Per-language status of VectorCraft's interface. How the catalogs work and how to add a language:
+Per-language status of VectorZ's interface. How the catalogs work and how to add a language:
 [`development.md` › Localisation](development.md#localisation). Part of
 [target-app-parity.md](target-app-parity.md).
 

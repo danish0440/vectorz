@@ -6,9 +6,9 @@
 use std::borrow::Cow;
 
 use serde_json::{Value, json};
-use vectorcraft_doc::live::{GradientMesh, envelope_grid};
-use vectorcraft_doc::{EnvelopeKind, Node, NodeId, NodeKind};
-use vectorcraft_geom::Point;
+use vectorz_doc::live::{GradientMesh, envelope_grid};
+use vectorz_doc::{EnvelopeKind, Node, NodeId, NodeKind};
+use vectorz_geom::Point;
 
 use crate::{Action, Overlay, ToolContext};
 
@@ -120,9 +120,9 @@ mod tests {
     use super::*;
     use crate::testutil::*;
     use crate::{PointerEvent, PointerKind, Tool};
-    use vectorcraft_doc::live::{EnvelopeOptions, grid_points};
-    use vectorcraft_doc::{Document, Selection};
-    use vectorcraft_geom::{Affine, Rect};
+    use vectorz_doc::live::{EnvelopeOptions, grid_points};
+    use vectorz_doc::{Document, Selection};
+    use vectorz_geom::{Affine, Rect};
 
     /// The rectangle of [`doc_with_rect`] (100..200 square) in a 1×1 mesh envelope.
     fn doc_with_envelope() -> (Document, NodeId) {

@@ -1,22 +1,22 @@
 [package]
-name = "vectorcraft-testkit"
+name = "vectorz-testkit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft test helpers: fixtures, generators, render comparison, geometry assertions"
+description = "VectorZ test helpers: fixtures, generators, render comparison, geometry assertions"
 publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-color = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-engine = { workspace = true }
-vectorcraft-render = { workspace = true }
-vectorcraft-format = { workspace = true }
-vectorcraft-svg = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-color = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-engine = { workspace = true }
+vectorz-render = { workspace = true }
+vectorz-format = { workspace = true }
+vectorz-svg = { workspace = true }
 kurbo = { workspace = true }
 serde_json = { workspace = true }
 proptest = { workspace = true }

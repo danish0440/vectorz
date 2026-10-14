@@ -37,8 +37,8 @@ mod tiff;
 pub use import::{Imported, ai_alone, family_style, import, import_with, is_loss, layered_ai};
 pub use print::{PrintJob, PrintPage, print};
 
-use vectorcraft_doc::Document;
-use vectorcraft_geom::{Point, Rect};
+use vectorz_doc::Document;
+use vectorz_geom::{Point, Rect};
 
 /// The PostScript language level the file needs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -211,7 +211,7 @@ pub fn export(doc: &Document, opts: &EpsOptions, preview: Option<&Raster>, thumb
     if ![r.x0, r.y0, r.x1, r.y1, opts.origin.x, opts.origin.y].iter().all(|v| v.is_finite()) {
         return Err("the export region is not finite".into());
     }
-    let baked = vectorcraft_effects::bake_document(doc);
+    let baked = vectorz_effects::bake_document(doc);
     let doc = baked.as_ref().unwrap_or(doc);
     let page = scene::Scene::new(doc, opts).run();
     let mut warnings = page.warnings;
@@ -237,10 +237,10 @@ pub fn export(doc: &Document, opts: &EpsOptions, preview: Option<&Raster>, thumb
     Ok(EpsOutput { bytes, warnings })
 }
 
-/// Comment lines that start a data section the file carries (`%VectorCraft_BeginData: <name>`)
+/// Comment lines that start a data section the file carries (`%VectorZ_BeginData: <name>`)
 /// and end it; between them, ASCII85 lines after `% `.
-const BEGIN_DATA: &str = "%VectorCraft_BeginData: ";
-const END_DATA: &str = "%VectorCraft_EndData";
+const BEGIN_DATA: &str = "%VectorZ_BeginData: ";
+const END_DATA: &str = "%VectorZ_EndData";
 /// The data sections.
 const NATIVE: &str = "native";
 const THUMBNAIL: &str = "thumbnail";
@@ -251,10 +251,10 @@ const MAX_NATIVE: u64 = 1 << 30;
 /// language level, data, and the spot colours `custom` with their CMYK equivalents.
 pub(crate) fn comments(s: &mut String, title: &str, created: Option<i64>, level: Level, custom: &[(String, [f32; 4])]) {
     use std::fmt::Write;
-    let _ = writeln!(s, "%%Creator: VectorCraft {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(s, "%%Creator: VectorZ {}", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(s, "%%Title: {}", ps::string(title));
     if let Some(t) = created {
-        let [y, mo, d, h, mi, se] = vectorcraft_doc::metadata::civil(t);
+        let [y, mo, d, h, mi, se] = vectorz_doc::metadata::civil(t);
         let _ = writeln!(s, "%%CreationDate: ({y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{se:02} UTC)");
     }
     let _ = writeln!(s, "%%LanguageLevel: {}", level.id());

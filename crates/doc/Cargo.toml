@@ -1,16 +1,16 @@
 [package]
-name = "vectorcraft-doc"
+name = "vectorz-doc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft document model: artboards, layers, objects, appearance (pure data + serde)"
+description = "VectorZ document model: artboards, layers, objects, appearance (pure data + serde)"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-color = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-color = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
 tiff = { workspace = true }

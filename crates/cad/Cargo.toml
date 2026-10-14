@@ -1,21 +1,21 @@
 [package]
-name = "vectorcraft-cad"
+name = "vectorz-cad"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft CAD interchange: a hand-written ASCII DXF writer (R12 to 2018)"
+description = "VectorZ CAD interchange: a hand-written ASCII DXF writer (R12 to 2018)"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-color = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-effects = { workspace = true }
-vectorcraft-brush = { workspace = true }
-vectorcraft-pathops = { workspace = true }
-vectorcraft-text = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-color = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-effects = { workspace = true }
+vectorz-brush = { workspace = true }
+vectorz-pathops = { workspace = true }
+vectorz-text = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
 

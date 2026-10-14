@@ -1,16 +1,16 @@
 //! The system clipboard's formats: Copy and Cut publish every flavour the engine makes
-//! ([`Session::clipboard_flavours`](vectorcraft_engine::Session::clipboard_flavours): text, SVG,
+//! ([`Session::clipboard_flavours`](vectorz_engine::Session::clipboard_flavours): text, SVG,
 //! PDF, PNG), and a Paste first turns what another app copied (SVG, PDF, EPS, an EMF, text, a bitmap,
 //! or a copied file that is one of them) into the internal clipboard with the `clipboard.import*`
 //! commands. The host installs the platform side as
 //! [`Services::system_clipboard`](crate::Services::system_clipboard); without it (the web) Copy
 //! publishes SVG text through egui and Paste takes SVG text, and the pictures and files the host
-//! reads from a paste itself ([`VectorcraftApp::paste_from_host`]).
+//! reads from a paste itself ([`VectorzApp::paste_from_host`]).
 
 use serde_json::{Value, json};
-use vectorcraft_engine::cmd::clipboard::{BITMAP, EMF, EPS, Flavour, PASTE_ORDER, PDF, SVG, TEXT, looks_like_svg, names_a_picture};
+use vectorz_engine::cmd::clipboard::{BITMAP, EMF, EPS, Flavour, PASTE_ORDER, PDF, SVG, TEXT, looks_like_svg, names_a_picture};
 
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 
 /// The platform clipboard, with every format it carries.
 pub trait SystemClipboard {
@@ -31,7 +31,7 @@ pub type ClipboardProbeFactory = Box<dyn FnOnce() -> Box<dyn SystemClipboard> + 
 
 /// The command (and its params) that loads `f` into the internal clipboard, centred on `center`.
 pub(crate) fn import_command(f: &Flavour, center: Option<[f64; 2]>) -> (&'static str, Value) {
-    let b64 = || vectorcraft_format::base64_encode(&f.data);
+    let b64 = || vectorz_format::base64_encode(&f.data);
     match f.mime {
         TEXT => {
             let text = String::from_utf8_lossy(&f.data);
@@ -49,7 +49,7 @@ pub(crate) fn import_command(f: &Flavour, center: Option<[f64; 2]>) -> (&'static
     }
 }
 
-impl VectorcraftApp {
+impl VectorzApp {
     /// After Copy or Cut: offer the copied objects to other apps.
     pub(crate) fn publish_clipboard(&mut self) {
         match self.services.system_clipboard.as_mut() {

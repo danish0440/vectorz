@@ -9,12 +9,12 @@
 //! and `preview`.
 
 use serde_json::{Map, Value, json};
-use vectorcraft_engine::cmd::{FlattenOptions, FlattenerPreset};
+use vectorz_engine::cmd::{FlattenOptions, FlattenerPreset};
 
 use super::{DialogSpec, form};
 use crate::state::Dialog;
 use crate::theme::Tokens;
-use crate::{VectorcraftApp, widgets};
+use crate::{VectorzApp, widgets};
 
 /// The dialog kind of Flatten Transparency.
 pub const KIND: &str = "flattenTransparency";
@@ -34,7 +34,7 @@ pub(super) const SPEC: DialogSpec =
     DialogSpec { heading: |_| tl!("Flatten Transparency").into(), body, confirm, preview: true, min_width: 420.0, ..DialogSpec::FORM };
 
 /// Open Flatten Transparency for the selection with the default preset.
-pub fn open(app: &mut VectorcraftApp) {
+pub fn open(app: &mut VectorzApp) {
     let name = FlattenOptions::preset_label(FlattenOptions::PRESETS[1]).unwrap_or_default();
     let mut d = Dialog::new(KIND, json!({ "preset": name, APPLIED: name, "preview": false }));
     put_options(&mut d.fields, &FlattenOptions::default());
@@ -80,7 +80,7 @@ fn applied(d: &mut Dialog, name: &str) {
     d.fields.insert(APPLIED.into(), json!(name));
 }
 
-fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let saved = &app.session.prefs.flattener_presets;
     sync(d, saved);
     let current = options(d, saved);
@@ -115,7 +115,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
 }
 
 /// Save Preset…: the new preset's name, Save and Cancel (Enter in the name saves).
-fn save_row(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
+fn save_row(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         widgets::dim_label(ui, tl!("Name:"));
@@ -138,7 +138,7 @@ fn save_row(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
 }
 
 /// Keep the dialog's options as the saved preset `__presetName` and select it.
-fn save_preset(app: &mut VectorcraftApp, d: &mut Dialog) -> Result<(), String> {
+fn save_preset(app: &mut VectorzApp, d: &mut Dialog) -> Result<(), String> {
     let mut p = params(d, &app.session.prefs.flattener_presets)?;
     p["name"] = json!(d.str(PRESET_NAME));
     let r = app.run("flattener.presets.save", p)?;
@@ -147,7 +147,7 @@ fn save_preset(app: &mut VectorcraftApp, d: &mut Dialog) -> Result<(), String> {
     Ok(())
 }
 
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let p = params(d, &app.session.prefs.flattener_presets)?;
     form::commit_preview(app, CMD, p)
 }
@@ -234,7 +234,7 @@ pub(crate) fn options_editor(ui: &mut egui::Ui, id: &str, o: &mut FlattenOptions
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_engine::Session;
+    use vectorz_engine::Session;
 
     /// The built-in presets are told from saved ones by name (only theirs are translated).
     #[test]
@@ -243,7 +243,7 @@ mod tests {
         assert!(!is_builtin("Regular") && !is_builtin("high"));
     }
 
-    fn frame(app: &mut VectorcraftApp) {
+    fn frame(app: &mut VectorzApp) {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::super::show(app, ui.ctx()));
@@ -251,8 +251,8 @@ mod tests {
     }
 
     /// A document with a half-transparent red square over a blue one, both selected.
-    fn scene() -> VectorcraftApp {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    fn scene() -> VectorzApp {
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         for (x, color) in [(10, "#0000ff"), (60, "#ff0000")] {
             let id = app.run("shape.rectangle", json!({"x": x, "y": x, "width": 100, "height": 100})).unwrap()["id"].clone();
@@ -264,7 +264,7 @@ mod tests {
         app
     }
 
-    fn transparent_left(app: &VectorcraftApp) -> bool {
+    fn transparent_left(app: &VectorzApp) -> bool {
         let mut any = false;
         for l in &app.session.doc().unwrap().doc.layers {
             l.walk(&mut |n| any |= n.opacity < 1.0 && !n.is_container());
@@ -299,7 +299,7 @@ mod tests {
         let st = app.session.doc().unwrap();
         assert_eq!(st.history.undo.len(), undo + 1);
         let mut images = 0;
-        st.doc.layers[0].walk(&mut |n| images += matches!(n.kind, vectorcraft_doc::NodeKind::Image(_)) as usize);
+        st.doc.layers[0].walk(&mut |n| images += matches!(n.kind, vectorz_doc::NodeKind::Image(_)) as usize);
         assert_eq!(images, 1, "balance 0 rasterizes");
         assert!(!transparent_left(&app));
     }

@@ -6,9 +6,9 @@
 //! draw the brackets from the same geometry they hit-test.
 
 use serde_json::{Map, Value, json};
-use vectorcraft_doc::{NodeId, NodeKind, TextKind};
-use vectorcraft_geom::kurbo::{Line, ParamCurveNearest};
-use vectorcraft_geom::{Affine, ArcPath, Point, Vec2};
+use vectorz_doc::{NodeId, NodeKind, TextKind};
+use vectorz_geom::kurbo::{Line, ParamCurveNearest};
+use vectorz_geom::{Affine, ArcPath, Point, Vec2};
 
 use crate::{Action, Overlay, PointerEvent, ToolContext};
 
@@ -215,7 +215,7 @@ mod tests {
     use super::*;
     use crate::testutil::*;
     use crate::{Mods, PointerKind};
-    use vectorcraft_doc::Selection;
+    use vectorz_doc::Selection;
 
     fn selected(id: NodeId) -> Selection {
         let mut s = Selection::default();

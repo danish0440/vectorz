@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vectorcraft_geom::Point;
+use vectorz_geom::Point;
 
 use crate::theme::Brightness;
 
@@ -31,7 +31,7 @@ impl Default for View {
 
 impl View {
     /// The view a document opens at: the one it was saved with, else fitted on first display.
-    pub fn of(st: &vectorcraft_engine::DocState) -> Self {
+    pub fn of(st: &vectorz_engine::DocState) -> Self {
         match &st.view {
             Some(v) if v.zoom.is_finite() && v.zoom > 0.0 && v.center.x.is_finite() && v.center.y.is_finite() => Self {
                 zoom: v.zoom.clamp(0.0313, 640.0),
@@ -223,7 +223,7 @@ impl Dialog {
     pub fn f64(&self, k: &str, d: f64) -> f64 {
         match self.fields.get(k) {
             Some(Value::Number(n)) => n.as_f64().unwrap_or(d),
-            Some(Value::String(s)) => vectorcraft_doc::Unit::Points.parse(s).unwrap_or(d),
+            Some(Value::String(s)) => vectorz_doc::Unit::Points.parse(s).unwrap_or(d),
             _ => d,
         }
     }
@@ -361,7 +361,7 @@ pub struct UiState {
     pub engine_prefs: Value,
     /// Color Guide panel: variation kind, steps and amount (Color Guide Options).
     #[serde(default)]
-    pub color_guide: vectorcraft_color::harmony::GuideOptions,
+    pub color_guide: vectorz_color::harmony::GuideOptions,
     /// The library open in the library panel (Window → Swatch Libraries).
     #[serde(default)]
     pub library_panel: Option<crate::panels::library_panel::OpenLibrary>,
@@ -640,13 +640,13 @@ impl UiState {
         self.status.clear();
         self.about = false;
         self.open_panel = None;
-        if self.group_tool.len() != vectorcraft_tools::TOOL_GROUPS.len() {
+        if self.group_tool.len() != vectorz_tools::TOOL_GROUPS.len() {
             self.group_tool = UiState::default().group_tool;
         }
         // One strip per group, of known tools (a hand-edited preferences file).
         let mut seen = std::collections::BTreeSet::new();
         self.floating_flyouts.retain_mut(|f| {
-            f.tools.retain(|id| vectorcraft_tools::tool_info(id).is_some());
+            f.tools.retain(|id| vectorz_tools::tool_info(id).is_some());
             f.tools.first().is_some_and(|k| seen.insert(k.clone()))
         });
         FloatingPanels::sanitize(&mut self.floating_panels, &mut self.toolbar_pos);
@@ -692,7 +692,7 @@ impl Default for UiState {
             told: vec![],
             answering_control: false,
             flyout: None,
-            group_tool: vectorcraft_tools::TOOL_GROUPS.iter().map(|g| g[0].id.to_string()).collect(),
+            group_tool: vectorz_tools::TOOL_GROUPS.iter().map(|g| g[0].id.to_string()).collect(),
             status: String::new(),
             palette_open: false,
             palette_query: String::new(),

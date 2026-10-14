@@ -1,10 +1,10 @@
 //! Raster (painted) effects: descriptions for the renderer.
 
 use serde_json::Value;
-use vectorcraft_doc::Effect;
-use vectorcraft_doc::color::{BlendMode, Color};
+use vectorz_doc::Effect;
+use vectorz_doc::color::{BlendMode, Color};
 
-use vectorcraft_geom::Rect;
+use vectorz_geom::Rect;
 
 use crate::merged_params;
 use crate::pixel::{self, PixelFx};

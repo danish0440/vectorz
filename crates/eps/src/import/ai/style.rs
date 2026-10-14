@@ -28,8 +28,8 @@
 use std::collections::HashMap;
 
 use serde_json::json;
-use vectorcraft_color::Paint;
-use vectorcraft_doc::{Dash, Effect, LineCap, LineJoin, WidthProfile};
+use vectorz_color::Paint;
+use vectorz_doc::{Dash, Effect, LineCap, LineJoin, WidthProfile};
 
 use super::lex::{Lexer, Tok};
 use super::obj::V;
@@ -322,7 +322,7 @@ fn style(filters: &[Filter]) -> ArtStyle {
         }
         let param = |k: &str| f.params.get(k).copied();
         let mode = |default: usize| super::read::blend_name(param("blnd").map_or(default, |v| v.max(0.0) as usize));
-        let color = f.fill.as_ref().and_then(Paint::color).unwrap_or(vectorcraft_color::Color::BLACK);
+        let color = f.fill.as_ref().and_then(Paint::color).unwrap_or(vectorz_color::Color::BLACK);
         match f.name.as_str() {
             // `blur`'s scale isn't publicly documented: read as the Gaussian's σ, an effect's blur being 2σ.
             GLOW => effects.push(Effect {

@@ -6,7 +6,7 @@
 use serde_json::{Value, json};
 
 use super::{DialogSpec, form, run_and_close};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::state::Dialog;
 
 pub(super) const SPEC: DialogSpec = DialogSpec { heading: |d| title(&d.kind).into(), body, confirm, preview: true, ..DialogSpec::FORM };
@@ -21,7 +21,7 @@ fn title(kind: &str) -> &'static str {
     }
 }
 
-fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     form::grid(ui, d, app.session.general_unit());
     ui.add_space(6.0);
     if d.kind == "scale" {
@@ -39,7 +39,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
 }
 
 /// Transform Patterns: the dialog's field, else General › Transform Pattern Tiles.
-fn transform_patterns(app: &VectorcraftApp, d: &Dialog) -> bool {
+fn transform_patterns(app: &VectorzApp, d: &Dialog) -> bool {
     d.fields.get("patterns").and_then(Value::as_bool).unwrap_or(app.session.prefs.transform_pattern_tiles)
 }
 
@@ -50,7 +50,7 @@ fn transform_objects(d: &Dialog) -> bool {
 }
 
 /// The Transform Objects and Transform Patterns checkboxes (fields `objects` and `patterns`).
-pub(super) fn object_options(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn object_options(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     d.fields.insert("objects".into(), Value::Bool(transform_objects(d)));
     form::check(ui, d, "objects", tl!("Transform Objects"));
     d.fields.insert("patterns".into(), Value::Bool(transform_patterns(app, d)));
@@ -58,7 +58,7 @@ pub(super) fn object_options(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Di
 }
 
 /// Add the dialog's Transform Objects and Transform Patterns options to command `params`.
-pub(super) fn add_object_options(app: &VectorcraftApp, d: &Dialog, params: &mut Value) {
+pub(super) fn add_object_options(app: &VectorzApp, d: &Dialog, params: &mut Value) {
     params["objects"] = json!(transform_objects(d));
     params["patterns"] = json!(transform_patterns(app, d));
 }
@@ -67,14 +67,14 @@ pub(super) fn add_object_options(app: &VectorcraftApp, d: &Dialog, params: &mut 
 const SCALE_OPTIONS: [(&str, &str, &str); 2] = [("corners", "scaleCorners", "Scale Corners"), ("strokes", "scaleStrokes", "Scale Strokes & Effects")];
 
 /// A scale option's value: the dialog's field, else the preference.
-fn scale_option(app: &VectorcraftApp, d: &Dialog, field: &str) -> bool {
+fn scale_option(app: &VectorzApp, d: &Dialog, field: &str) -> bool {
     let prefs = &app.session.prefs;
     d.fields.get(field).and_then(Value::as_bool).unwrap_or(if field == "corners" { prefs.scale_corners } else { prefs.scale_strokes })
 }
 
 /// The Scale Corners and Scale Strokes & Effects checkboxes (fields `corners` and `strokes`),
 /// starting from the preferences.
-pub(super) fn scale_options(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn scale_options(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     for (field, _, label) in SCALE_OPTIONS {
         let on = scale_option(app, d, field);
         d.fields.insert(field.into(), Value::Bool(on));
@@ -83,7 +83,7 @@ pub(super) fn scale_options(app: &VectorcraftApp, ui: &mut egui::Ui, d: &mut Dia
 }
 
 /// Add the dialog's scale options to command `params`.
-pub(super) fn add_scale_options(app: &VectorcraftApp, d: &Dialog, params: &mut Value) {
+pub(super) fn add_scale_options(app: &VectorzApp, d: &Dialog, params: &mut Value) {
     for (field, _, _) in SCALE_OPTIONS {
         params[field] = json!(scale_option(app, d, field));
     }
@@ -91,7 +91,7 @@ pub(super) fn add_scale_options(app: &VectorcraftApp, d: &Dialog, params: &mut V
 
 /// `params` with the dialog's scale options, which also become the preferences (they are shared
 /// with the Transform panel and Preferences, as in the reference app).
-pub(super) fn with_scale_options(app: &mut VectorcraftApp, d: &Dialog, mut params: Value) -> Result<Value, String> {
+pub(super) fn with_scale_options(app: &mut VectorzApp, d: &Dialog, mut params: Value) -> Result<Value, String> {
     add_scale_options(app, d, &mut params);
     let prefs: serde_json::Map<String, Value> = SCALE_OPTIONS.iter().map(|(field, pref, _)| (pref.to_string(), params[*field].clone())).collect();
     app.run("prefs.set", json!({ "values": prefs }))?;
@@ -107,7 +107,7 @@ fn origin_params(d: &Dialog, mut p: Value) -> Value {
 }
 
 /// The dialog's command and its params (Scale's without its scale options).
-fn command(app: &VectorcraftApp, d: &Dialog) -> (&'static str, Value) {
+fn command(app: &VectorzApp, d: &Dialog) -> (&'static str, Value) {
     let (id, mut params) = match d.kind.as_str() {
         "move" => ("object.move", json!({"dx": d.f64("dx", 0.0), "dy": d.f64("dy", 0.0)})),
         "rotate" => ("object.rotate", json!({"angle": d.f64("angle", 0.0)})),
@@ -127,7 +127,7 @@ fn command(app: &VectorcraftApp, d: &Dialog) -> (&'static str, Value) {
     if id == "object.move" { (id, params) } else { (id, origin_params(d, params)) }
 }
 
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     // The preview is rolled back and the command run as without one, so its undo step, its journal
     // entry and Transform Again are the same either way.
     if app.session.in_interaction() {
@@ -143,13 +143,13 @@ fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use vectorcraft_engine::Session;
+    use vectorz_engine::Session;
 
-    use crate::VectorcraftApp;
+    use crate::VectorzApp;
 
     #[test]
     fn scale_options_start_from_and_update_the_preferences() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50, "radius": 5})).unwrap();
         app.run("select.all", json!({})).unwrap();
@@ -178,22 +178,22 @@ mod tests {
     /// that Transform Again repeats.
     #[test]
     fn preview_follows_the_stepped_angle() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 100, "y": 100, "width": 60, "height": 20})).unwrap();
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
-        let frame = |app: &mut VectorcraftApp, key: Option<(egui::Key, egui::Modifiers)>| {
+        let frame = |app: &mut VectorzApp, key: Option<(egui::Key, egui::Modifiers)>| {
             let events = key.map(|(key, modifiers)| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             let mut out =
                 ctx.run_ui(egui::RawInput { events: events.into_iter().collect(), ..Default::default() }, |ui| crate::dialogs::show(app, ui.ctx()));
             out.textures_delta.clear();
         };
-        let size = |app: &VectorcraftApp| {
+        let size = |app: &VectorzApp| {
             let b = app.session.doc().unwrap().doc.layers[0].children().unwrap()[0].geometric_bounds().unwrap();
             (b.width().round(), b.height().round())
         };
-        let undo_steps = |app: &VectorcraftApp| app.session.doc().unwrap().history.undo.len();
+        let undo_steps = |app: &VectorzApp| app.session.doc().unwrap().history.undo.len();
         let steps = undo_steps(&app);
         crate::menus::invoke(&mut app, "object.rotate", json!({}));
         frame(&mut app, None);
@@ -239,7 +239,7 @@ mod tests {
     /// the command (on until switched off).
     #[test]
     fn reflect_takes_an_angle_and_transform_objects() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 100, "y": 100, "width": 60, "height": 20})).unwrap();
         let ctx = egui::Context::default();
@@ -265,7 +265,7 @@ mod tests {
     /// command.
     #[test]
     fn transform_patterns_starts_from_the_preference() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
         app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap();
         let ctx = egui::Context::default();

@@ -17,8 +17,8 @@
 //! `path.curvatureEdit`, `path.convertAnchor` or `path.removeAnchor` (one undo step).
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{NodeId, Selection};
-use vectorcraft_geom::{Anchor, AnchorKind, BezPath, Point, SubPath, Vec2};
+use vectorz_doc::{NodeId, Selection};
+use vectorz_geom::{Anchor, AnchorKind, BezPath, Point, SubPath, Vec2};
 
 use super::{FEEDBACK, anchor_in, catmull_rom, editable_paths, remove_anchor, segment_in};
 use crate::guides::{DrawSnap, Leave, Targets};
@@ -605,8 +605,8 @@ impl Tool for CurvatureTool {
 mod tests {
     use super::*;
     use crate::testutil::*;
-    use vectorcraft_doc::{Appearance, Document, Node, Selection};
-    use vectorcraft_geom::{ParamCurve, PathData};
+    use vectorz_doc::{Appearance, Document, Node, Selection};
+    use vectorz_geom::{ParamCurve, PathData};
 
     #[test]
     fn first_click_creates_then_notify_tracks_path() {

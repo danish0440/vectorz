@@ -2,16 +2,16 @@
 use super::*;
 use crate::{dialogs, theme};
 use egui::{Event, Modifiers, PointerButton};
-use vectorcraft_engine::Session;
+use vectorz_engine::Session;
 
 struct Harness {
-    app: VectorcraftApp,
+    app: VectorzApp,
     ctx: egui::Context,
 }
 
 impl Harness {
     fn new() -> Self {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width":300,"height":300})).unwrap();
         app.run("path.create", json!({"d":"M150 40 L180 60 L180 140 L150 160"})).unwrap();
         app.run("paint.setFill", json!({"color":"#338ad6"})).unwrap();

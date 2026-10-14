@@ -1,17 +1,17 @@
 //! Attributes panel: Overprint Fill / Overprint Stroke, Show / Don't Show Center, Reverse Path
 //! Direction Off / On, the fill rule (non-zero winding or even-odd), Image Map, URL (with the
 //! recent URLs and a Browser button) and the note. The menu hides the options and shows the note.
-//! Everything reads `attributes.info` ([`vectorcraft_engine::Session::attributes_info`]) and acts
+//! Everything reads `attributes.info` ([`vectorz_engine::Session::attributes_info`]) and acts
 //! through `attributes.set`, `path.reverse` and `path.setFillRule`.
 
 use egui::Ui;
 use serde_json::{Value, json};
-use vectorcraft_doc::{ImageMap, NodeId, NodeKind};
-use vectorcraft_engine::cmd::AttributesInfo;
-use vectorcraft_geom::FillRule;
+use vectorz_doc::{ImageMap, NodeId, NodeKind};
+use vectorz_engine::cmd::AttributesInfo;
+use vectorz_geom::FillRule;
 
 use super::{pstate, selection_len, set_pstate};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::widgets::{self, menu_item};
 
 /// Panel state: the options (centre, direction, fill rule, image map, URL) are hidden.
@@ -22,7 +22,7 @@ const LABEL_W: f32 = 70.0;
 
 /// The panel's values and whether the targets hold paths (direction and fill rule apply),
 /// recomputed only when the document or the selection changes.
-fn state(app: &VectorcraftApp, ctx: &egui::Context) -> (AttributesInfo, bool) {
+fn state(app: &VectorzApp, ctx: &egui::Context) -> (AttributesInfo, bool) {
     type Key = (u64, u64, usize, Option<NodeId>, Option<NodeId>);
     let Some(st) = app.session.active() else { return Default::default() };
     let sel = &st.selection.objects;
@@ -44,7 +44,7 @@ fn state(app: &VectorcraftApp, ctx: &egui::Context) -> (AttributesInfo, bool) {
 }
 
 /// Run `attributes.set` with `p` on the selection (errors show in the status bar).
-fn set(app: &mut VectorcraftApp, p: Value) {
+fn set(app: &mut VectorzApp, p: Value) {
     app.run("attributes.set", p).ok();
 }
 
@@ -60,7 +60,7 @@ fn pair<T: Copy + PartialEq>(ui: &mut Ui, enabled: bool, current: Option<T>, ite
     clicked
 }
 
-pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn show(app: &mut VectorzApp, ui: &mut Ui) {
     let (info, paths) = state(app, ui.ctx());
     let has = !info.ids.is_empty();
     ui.horizontal(|ui| {
@@ -134,7 +134,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
 }
 
 /// The recent URLs button: a menu of the URLs given lately; picking one sets it.
-fn recent_urls(app: &mut VectorcraftApp, ui: &mut Ui) {
+fn recent_urls(app: &mut VectorzApp, ui: &mut Ui) {
     let resp = widgets::icon_button_enabled(ui, "chevron-down", tl!("Recent URLs"), false, !app.session.recent_urls.is_empty(), 20.0);
     let mut chosen = None;
     egui::Popup::menu(&resp).show(|ui| {
@@ -150,7 +150,7 @@ fn recent_urls(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
-pub fn menu(_app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn menu(_app: &mut VectorzApp, ui: &mut Ui) {
     for (key, hide, show) in [(HIDE_OPTIONS, tl!("Hide Options"), tl!("Show Options")), (HIDE_NOTE, tl!("Hide Note"), tl!("Show Note"))] {
         let hidden: bool = pstate(ui.ctx(), key);
         if menu_item(ui, if hidden { show } else { hide }, true, false) {
@@ -160,7 +160,7 @@ pub fn menu(_app: &mut VectorcraftApp, ui: &mut Ui) {
 }
 
 /// `attributes.openUrl {url?}`: open `url`, else the selection's URL, in the web browser.
-pub(crate) fn open_url(app: &mut VectorcraftApp, p: &Value) -> Result<Value, String> {
+pub(crate) fn open_url(app: &mut VectorzApp, p: &Value) -> Result<Value, String> {
     let url = match p.get("url").and_then(Value::as_str) {
         Some(u) => u.to_string(),
         None => app.session.attributes_info().url.filter(|u| !u.is_empty()).ok_or("the selection has no URL (or they differ)")?,
@@ -172,10 +172,10 @@ pub(crate) fn open_url(app: &mut VectorcraftApp, p: &Value) -> Result<Value, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_engine::Session;
+    use vectorz_engine::Session;
 
     /// Run the panel and its menu for one headless frame: the texts drawn.
-    fn frame(app: &mut VectorcraftApp) -> Vec<String> {
+    fn frame(app: &mut VectorzApp) -> Vec<String> {
         fn texts(s: &egui::Shape, out: &mut Vec<String>) {
             match s {
                 egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
@@ -194,13 +194,13 @@ mod tests {
         v
     }
 
-    fn run(app: &mut VectorcraftApp, id: &str, p: Value) -> Value {
+    fn run(app: &mut VectorzApp, id: &str, p: Value) -> Value {
         app.session.execute(id, &p).unwrap()
     }
 
     #[test]
     fn panel_shows_the_selections_attributes() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         run(&mut app, "file.new", json!({"width": 100, "height": 100}));
         let texts = frame(&mut app);
         assert!(texts.iter().any(|t| t == "No Selection") && texts.iter().any(|t| t == "Overprint Fill"), "{texts:?}");

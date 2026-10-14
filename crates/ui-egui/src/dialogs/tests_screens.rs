@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde_json::{Value, json};
-use vectorcraft_engine::Session;
-use vectorcraft_engine::cmd::fileio;
+use vectorz_engine::Session;
+use vectorz_engine::cmd::fileio;
 
 use super::tests_export::{frame, kind, set};
 use super::*;
@@ -16,7 +16,7 @@ type Log = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 /// An app with `artboards` 60×40 pt artboards and an ellipse on the first; `web` gives it a
 /// download service (recorded in the log) instead of a file manager (whose reveals are recorded).
-fn app(artboards: usize, web: bool) -> (VectorcraftApp, Log) {
+fn app(artboards: usize, web: bool) -> (VectorzApp, Log) {
     let log = Log::default();
     let l = log.clone();
     let mut services = Services::default();
@@ -32,17 +32,17 @@ fn app(artboards: usize, web: bool) -> (VectorcraftApp, Log) {
         }));
         services.pick_folder = Some(Box::new(|| None));
     }
-    let mut app = VectorcraftApp::new(Session::new(), services);
+    let mut app = VectorzApp::new(Session::new(), services);
     app.run("file.new", json!({"width": 60, "height": 40, "artboards": artboards})).unwrap();
     app.run("shape.ellipse", json!({"x": 5, "y": 4, "width": 30, "height": 20})).unwrap();
     (app, log)
 }
 
-fn field(app: &VectorcraftApp, k: &str) -> Value {
+fn field(app: &VectorzApp, k: &str) -> Value {
     app.ui.dialog.as_ref().expect("a dialog is open").fields.get(k).cloned().unwrap_or(Value::Null)
 }
 
-fn open(app: &mut VectorcraftApp) {
+fn open(app: &mut VectorzApp) {
     app.run("file.exportForScreens", json!({})).unwrap();
     assert_eq!(kind(app), Some(export_for_screens::KIND));
 }
@@ -154,7 +154,7 @@ fn the_web_downloads_one_zip_or_the_file() {
         let log = log.borrow();
         let [(name, zip)] = log.as_slice() else { panic!("one download: {:?}", log.iter().map(|(n, _)| n).collect::<Vec<_>>()) };
         assert_eq!(name, "Untitled-1.zip");
-        assert_eq!(&vectorcraft_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap(), zip);
+        assert_eq!(&vectorz_format::base64_decode(r["dataBase64"].as_str().unwrap()).unwrap(), zip);
     }
     assert_eq!(r["files"], json!(["Artboard-1.png", "Artboard-1@2x.jpg", "Artboard-2.png", "Artboard-2@2x.jpg"]));
     // One file downloads as itself, with the format's settings.
@@ -207,7 +207,7 @@ impl ScreensFrame {
         Self { ctx, time: 0.0 }
     }
 
-    fn frame(&mut self, app: &mut VectorcraftApp, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame(&mut self, app: &mut VectorzApp, events: Vec<egui::Event>) -> egui::FullOutput {
         self.time += 0.1;
         let input = egui::RawInput {
             events,
@@ -220,12 +220,12 @@ impl ScreensFrame {
         out
     }
 
-    fn settle(&mut self, app: &mut VectorcraftApp) -> egui::FullOutput {
+    fn settle(&mut self, app: &mut VectorzApp) -> egui::FullOutput {
         self.frame(app, vec![]);
         self.frame(app, vec![])
     }
 
-    fn asset_panel(&mut self, app: &mut VectorcraftApp, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn asset_panel(&mut self, app: &mut VectorzApp, events: Vec<egui::Event>) -> egui::FullOutput {
         self.time += 0.1;
         let input = egui::RawInput {
             events,
@@ -238,7 +238,7 @@ impl ScreensFrame {
         out
     }
 
-    fn click(&mut self, app: &mut VectorcraftApp, at: egui::Pos2) -> egui::FullOutput {
+    fn click(&mut self, app: &mut VectorzApp, at: egui::Pos2) -> egui::FullOutput {
         let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         self.frame(app, vec![egui::Event::PointerMoved(at)]);
         self.frame(app, vec![button(true)]);
@@ -246,12 +246,12 @@ impl ScreensFrame {
         self.settle(app)
     }
 
-    fn click_label(&mut self, app: &mut VectorcraftApp, label: &str) -> egui::FullOutput {
+    fn click_label(&mut self, app: &mut VectorzApp, label: &str) -> egui::FullOutput {
         let out = self.settle(app);
         self.click(app, screen_text_at(&out, label))
     }
 
-    fn choose(&mut self, app: &mut VectorcraftApp, current: &str, next: &str) {
+    fn choose(&mut self, app: &mut VectorzApp, current: &str, next: &str) {
         let out = self.click_label(app, current);
         self.click(app, screen_text_at(&out, next));
     }
@@ -320,7 +320,7 @@ fn saved_tiff_alias_gear(alias: &str, asset_panel: bool) {
         open(&mut app);
     }
     let mut h = ScreensFrame::new();
-    let draw = |h: &mut ScreensFrame, app: &mut VectorcraftApp, events| {
+    let draw = |h: &mut ScreensFrame, app: &mut VectorzApp, events| {
         if asset_panel { h.asset_panel(app, events) } else { h.frame(app, events) }
     };
     draw(&mut h, &mut app, vec![]);

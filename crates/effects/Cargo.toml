@@ -1,22 +1,22 @@
 [package]
-name = "vectorcraft-effects"
+name = "vectorz-effects"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft live effects evaluated to geometry"
+description = "VectorZ live effects evaluated to geometry"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-three-d = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-pathops = { workspace = true }
-vectorcraft-text = { workspace = true }
-vectorcraft-plugins = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-three-d = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-pathops = { workspace = true }
+vectorz-text = { workspace = true }
+vectorz-plugins = { workspace = true }
 kurbo = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-vectorcraft-color = { workspace = true }
+vectorz-color = { workspace = true }

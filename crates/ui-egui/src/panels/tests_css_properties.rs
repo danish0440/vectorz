@@ -6,18 +6,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde_json::json;
-use vectorcraft_engine::Session;
-use vectorcraft_svg::{CssOptions, CssUnits};
+use vectorz_engine::Session;
+use vectorz_svg::{CssOptions, CssUnits};
 
 use super::css_properties::{ALL, ID, OPTIONS, menu, show};
 use super::set_pstate;
 use crate::tests_labels::painted_text;
-use crate::{Services, VectorcraftApp};
+use crate::{Services, VectorzApp};
 
 type Log = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 /// An app with a selected red 30 × 20 rectangle; files written go to the log.
-fn app() -> (VectorcraftApp, Log) {
+fn app() -> (VectorzApp, Log) {
     let log = Log::default();
     let l = log.clone();
     let services = Services {
@@ -27,7 +27,7 @@ fn app() -> (VectorcraftApp, Log) {
         })),
         ..Services::default()
     };
-    let mut app = VectorcraftApp::new(Session::new(), services);
+    let mut app = VectorzApp::new(Session::new(), services);
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 30, "height": 20})).unwrap();
     app.run("paint.setFill", json!({"color": "#ff0000"})).unwrap();

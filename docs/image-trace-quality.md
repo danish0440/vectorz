@@ -12,7 +12,7 @@ with any other product except the open tracer named under [Yardstick](#4-yardsti
 built-in preset, and measures the result:
 
 ```text
-TRACE_QUALITY_REPORT=report.md cargo test --release -p vectorcraft-trace --test quality -- --ignored
+TRACE_QUALITY_REPORT=report.md cargo test --release -p vectorz-trace --test quality -- --ignored
 ```
 
 **Inputs** (drawn anti-aliased at 128, 256 and 512 px, and at 256 px also blurred, with compression-like

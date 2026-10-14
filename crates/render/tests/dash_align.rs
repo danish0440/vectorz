@@ -1,11 +1,11 @@
 //! Pixel tests for dashes fitted to corners and for width profiles with dashes and joins, drawn
-//! on the canvas from the shared stroke geometry (`vectorcraft_effects::stroke`).
+//! on the canvas from the shared stroke geometry (`vectorz_effects::stroke`).
 
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{Appearance, AppearanceItem, Dash, Document, LineJoin, StrokeLayer, WidthProfile};
-use vectorcraft_geom::{PathData, Point, Rect, SubPath, shapes};
-use vectorcraft_testkit::fixtures::DocBuilder;
-use vectorcraft_testkit::raster::{Image, render_region};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{Appearance, AppearanceItem, Dash, Document, LineJoin, StrokeLayer, WidthProfile};
+use vectorz_geom::{PathData, Point, Rect, SubPath, shapes};
+use vectorz_testkit::fixtures::DocBuilder;
+use vectorz_testkit::raster::{Image, render_region};
 
 /// Pixels per point in these tests.
 const S: f64 = 4.0;

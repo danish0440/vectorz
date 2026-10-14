@@ -1,9 +1,9 @@
 //! PostScript print jobs: DSC page comments, the setup of each sheet, and a file the PostScript
 //! reader reads back.
 
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{Appearance, Document, Node, NodeId};
-use vectorcraft_geom::{Affine, Rect, shapes};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{Appearance, Document, Node, NodeId};
+use vectorz_geom::{Affine, Rect, shapes};
 
 use super::*;
 

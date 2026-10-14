@@ -8,8 +8,8 @@
 //! Scissors: click a path to split it there.
 
 use serde_json::json;
-use vectorcraft_doc::NodeId;
-use vectorcraft_geom::Point;
+use vectorz_doc::NodeId;
+use vectorz_geom::Point;
 
 use super::{hit_anchor, hit_segment, insert_anchor, remove_anchor};
 use crate::direct::hit_handle;
@@ -221,7 +221,7 @@ impl Tool for AnchorTool {
 mod tests {
     use super::*;
     use crate::testutil::*;
-    use vectorcraft_doc::Selection;
+    use vectorz_doc::Selection;
 
     #[test]
     fn add_and_delete_anchor_clicks() {
@@ -279,10 +279,10 @@ mod tests {
         let (mut d, _) = doc_with_rect();
         let l = d.layers[0].id;
         let id = d.alloc_id();
-        let mut sp = vectorcraft_geom::SubPath::polyline(&[Point::new(100.0, 300.0), Point::new(200.0, 300.0), Point::new(300.0, 300.0)], false);
-        sp.anchors[1] = vectorcraft_geom::Anchor::smooth(Point::new(200.0, 300.0), Point::new(240.0, 300.0));
-        let path = vectorcraft_geom::PathData::single(sp);
-        d.insert(Some(l), 1, vectorcraft_doc::Node::path(id, path, vectorcraft_doc::Appearance::default_art())).unwrap();
+        let mut sp = vectorz_geom::SubPath::polyline(&[Point::new(100.0, 300.0), Point::new(200.0, 300.0), Point::new(300.0, 300.0)], false);
+        sp.anchors[1] = vectorz_geom::Anchor::smooth(Point::new(200.0, 300.0), Point::new(240.0, 300.0));
+        let path = vectorz_geom::PathData::single(sp);
+        d.insert(Some(l), 1, vectorz_doc::Node::path(id, path, vectorz_doc::Appearance::default_art())).unwrap();
         let mut s = Selection::default();
         s.set([id]);
         let p = paint();

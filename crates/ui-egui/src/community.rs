@@ -5,7 +5,7 @@
 use egui::{Color32, CornerRadius, Sense, Ui, vec2};
 
 use crate::theme::{self, Tokens};
-use crate::{VectorcraftApp, icons};
+use crate::{VectorzApp, icons};
 
 /// Discord's brand colour (a colour, not a logo).
 const DISCORD: Color32 = Color32::from_rgb(0x58, 0x65, 0xF2);
@@ -24,7 +24,7 @@ pub fn discord_width(ui: &Ui, large: bool) -> f32 {
 }
 
 /// A Discord pill button: compact for the header, large for About / Home.
-pub fn discord_button(app: &mut VectorcraftApp, ui: &mut Ui, large: bool) -> egui::Response {
+pub fn discord_button(app: &mut VectorzApp, ui: &mut Ui, large: bool) -> egui::Response {
     let (galley, h, w) = discord_layout(ui, large);
     let icon = h * 0.55;
     let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
@@ -33,7 +33,7 @@ pub fn discord_button(app: &mut VectorcraftApp, ui: &mut Ui, large: bool) -> egu
     let ir = egui::Rect::from_center_size(r.left_center() + vec2(h * 0.35 + icon / 2.0, 0.0), vec2(icon, icon));
     icons::paint(ui, "message-circle", ir, Color32::WHITE);
     ui.painter().galley(egui::pos2(ir.right() + h * 0.2, r.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
-    let resp = resp.on_hover_text(tl!("Join the ArtCraft community on Discord (discord.gg/artcraft)"));
+    let resp = resp.on_hover_text(tl!("Get help on GitHub (discord.gg/artcraft)"));
     if resp.clicked() {
         app.open_link("help.discord");
     }
@@ -41,7 +41,7 @@ pub fn discord_button(app: &mut VectorcraftApp, ui: &mut Ui, large: bool) -> egu
 }
 
 /// One link row: icon, label, opens the command's URL.
-fn link(app: &mut VectorcraftApp, ui: &mut Ui, icon: &str, label: &str, cmd: &str, url: &str) {
+fn link(app: &mut VectorzApp, ui: &mut Ui, icon: &str, label: &str, cmd: &str, url: &str) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         icons::icon(ui, icon, 16.0, t.icon);
@@ -53,13 +53,13 @@ fn link(app: &mut VectorcraftApp, ui: &mut Ui, icon: &str, label: &str, cmd: &st
 }
 
 /// The Discord button and the website / app page / GitHub links.
-pub fn links(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn links(app: &mut VectorzApp, ui: &mut Ui) {
     discord_button(app, ui, true);
     ui.add_space(8.0);
     let l = app.session.execute("help.links", &serde_json::json!({})).unwrap_or_default();
     let s = |k: &str| l[k].as_str().unwrap_or("").to_string();
     link(app, ui, "globe", tl!("ArtCraft website"), "help.website", &s("website"));
-    link(app, ui, "external-link", tl!("VectorCraft on getartcraft.com"), "help.appPage", &s("appPage"));
+    link(app, ui, "external-link", tl!("VectorZ on getartcraft.com"), "help.appPage", &s("appPage"));
     link(app, ui, "git-branch", tl!("Source code on GitHub"), "help.github", &s("github"));
 }
 
@@ -73,22 +73,22 @@ mod tests {
         let opened = Arc::new(Mutex::new(vec![]));
         let o = opened.clone();
         let services = crate::Services { open_url: Some(Box::new(move |u: &str| o.lock().unwrap().push(u.to_string()))), ..Default::default() };
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), services);
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), services);
         for id in ["help.discord", "help.website", "help.appPage", "help.github"] {
             crate::menus::invoke(&mut app, id, serde_json::json!({}));
         }
         assert_eq!(
             *opened.lock().unwrap(),
             [
-                "https://discord.gg/artcraft",
-                "https://getartcraft.com",
-                "https://getartcraft.com/apps/vectorcraft",
-                "https://github.com/storytold/vectorcraft"
+                "https://github.com/danish0440/vectorz/issues",
+                "https://github.com/danish0440/vectorz",
+                "https://github.com/danish0440/vectorz",
+                "https://github.com/danish0440/vectorz"
             ]
         );
         // The control channel / MCP path returns the URL without opening a browser.
         let v = app.run("help.discord", serde_json::json!({})).unwrap();
-        assert_eq!(v["url"], "https://discord.gg/artcraft");
+        assert_eq!(v["url"], "https://github.com/danish0440/vectorz/issues");
         assert_eq!(opened.lock().unwrap().len(), 4);
         let ctx = egui::Context::default();
         theme::install_fonts(&ctx);

@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use vectorcraft_color::Paint;
-use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
+use vectorz_color::Paint;
+use vectorz_doc::{Document, Node, NodeId, NodeKind};
 
 use super::*;
 

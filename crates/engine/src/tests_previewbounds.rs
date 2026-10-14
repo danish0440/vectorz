@@ -2,9 +2,9 @@
 //! visual bounds (strokes included) when it is on.
 
 use serde_json::{Value, json};
-use vectorcraft_doc::NodeId;
-use vectorcraft_geom::Rect;
-use vectorcraft_tools::{PointerEvent, PointerKind};
+use vectorz_doc::NodeId;
+use vectorz_geom::Rect;
+use vectorz_tools::{PointerEvent, PointerKind};
 
 use super::*;
 
@@ -143,7 +143,7 @@ fn set_bounds_gives_one_path_sizes_out_of_proportion_when_strokes_scale() {
         preview(&mut s, true);
         run(&mut s, "object.setBounds", json!({"width": width, "height": height, "reference": 0, "strokes": true}));
         let v = s.transform_bounds(&[id]).unwrap();
-        let Some(vectorcraft_doc::LiveShape::Rectangle { xf, .. }) = s.doc().unwrap().doc.node(id).unwrap().live_shape() else {
+        let Some(vectorz_doc::LiveShape::Rectangle { xf, .. }) = s.doc().unwrap().doc.node(id).unwrap().live_shape() else {
             panic!("the rectangle")
         };
         if !close(v, Rect::new(95.0, 95.0, 95.0 + width, 95.0 + height)) || xf.as_coeffs()[0] <= 0.0 {

@@ -3,11 +3,11 @@
 // Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md › Robustness).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{Appearance, AppearanceItem, Dash, Document, Node, StrokeLayer};
-use vectorcraft_geom::{Rect, shapes};
-use vectorcraft_svg::{ExportOptions, export};
-use vectorcraft_testkit::raster::{Image, assert_similar, render_artboard};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::{Appearance, AppearanceItem, Dash, Document, Node, StrokeLayer};
+use vectorz_geom::{Rect, shapes};
+use vectorz_svg::{ExportOptions, export};
+use vectorz_testkit::raster::{Image, assert_similar, render_artboard};
 
 fn rect_doc(align_corners: bool) -> Document {
     let mut d = Document::new(140.0, 90.0);

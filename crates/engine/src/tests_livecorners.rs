@@ -5,9 +5,9 @@
 use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{AnchorRef, LiveCorners, LiveShape, NodeKind};
-use vectorcraft_geom::Affine;
-use vectorcraft_geom::shapes::CornerKind;
+use vectorz_doc::{AnchorRef, LiveCorners, LiveShape, NodeKind};
+use vectorz_geom::Affine;
+use vectorz_geom::shapes::CornerKind;
 
 use super::*;
 
@@ -177,7 +177,7 @@ fn star(s: &mut Session) -> NodeId {
     NodeId(s.execute("shape.star", &json!({"cx": 200, "cy": 200, "radius1": 60, "radius2": 30})).unwrap()["id"].as_u64().unwrap())
 }
 
-fn node_path(s: &Session, id: NodeId) -> (vectorcraft_geom::PathData, Option<LiveShape>) {
+fn node_path(s: &Session, id: NodeId) -> (vectorz_geom::PathData, Option<LiveShape>) {
     let NodeKind::Path { path, live, .. } = &s.doc().unwrap().doc.node(id).unwrap().kind else { panic!("not a path") };
     (path.clone(), live.as_deref().cloned())
 }

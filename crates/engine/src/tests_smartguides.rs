@@ -2,9 +2,9 @@
 //! tool's corners and the Pen's anchors land, and the guides they show.
 
 use serde_json::json;
-use vectorcraft_doc::NodeId;
-use vectorcraft_geom::{Point, Rect};
-use vectorcraft_tools::{Mods, Overlay, PointerEvent, PointerKind};
+use vectorz_doc::NodeId;
+use vectorz_geom::{Point, Rect};
+use vectorz_tools::{Mods, Overlay, PointerEvent, PointerKind};
 
 use super::*;
 use crate::tooling::ViewInfo;

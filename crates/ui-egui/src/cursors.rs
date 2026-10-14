@@ -7,7 +7,7 @@
 
 use egui::epaint::{Mesh, TessellationOptions, Tessellator, Vertex};
 use egui::{Color32, CustomCursorImage, Painter, Pos2, Shape, Stroke, Vec2, pos2, vec2};
-use vectorcraft_tools::Cursor;
+use vectorz_tools::Cursor;
 
 const INK: Color32 = Color32::BLACK;
 const HALO: Color32 = Color32::WHITE;
@@ -388,8 +388,8 @@ pub const OS_CURSORS: bool = !cfg!(any(target_os = "macos", target_arch = "wasm3
 
 /// Does this window show the glyphs as OS cursors, on a build that can ([`OS_CURSORS`])? Not on
 /// Wayland, where the compositor decides how big a cursor bitmap shows: Hyprland shows each pixel
-/// as a point, twice too big on a 2× display (#1645). The window paints them there, as PhotoCraft
-/// and PdfCraft do.
+/// as a point, twice too big on a 2× display (#1645). The window paints them there, as PhotoZ
+/// and PdfZ do.
 pub fn os_cursors(build: bool, wayland: bool) -> bool {
     build && !wayland
 }
@@ -502,9 +502,9 @@ mod tests {
 
     use super::*;
     use serde_json::json;
-    use vectorcraft_engine::Session;
+    use vectorz_engine::Session;
 
-    use crate::VectorcraftApp;
+    use crate::VectorzApp;
 
     /// Every cursor with a glyph.
     const GLYPHS: [Cursor; 38] = [
@@ -616,7 +616,7 @@ mod tests {
     }
 
     /// One headless 800×600 frame of the whole window, a tenth of a second after the last.
-    fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame(app: &mut VectorzApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         let time = Some(ctx.input(|i| i.time) + 0.1);
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), time, events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn the_canvas_hands_the_tool_cursor_to_the_os_and_idles_while_the_pointer_rests() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         let ctx = egui::Context::default();
         for _ in 0..3 {
@@ -666,7 +666,7 @@ mod tests {
     /// On Wayland the glyph is painted and the pointer hidden over the canvas, on every build (#1645).
     #[test]
     fn a_wayland_window_paints_the_tool_cursor() {
-        let mut app = VectorcraftApp::new(Session::new(), crate::Services { wayland: true, ..Default::default() });
+        let mut app = VectorzApp::new(Session::new(), crate::Services { wayland: true, ..Default::default() });
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         let ctx = egui::Context::default();
         for _ in 0..3 {
@@ -682,7 +682,7 @@ mod tests {
     /// size whatever the UI Scaling; on, they grow with it.
     #[test]
     fn tool_cursors_scale_with_the_ui_only_when_asked() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.run("prefs.set", json!({"key": "uiScaling", "value": 2.0})).unwrap();
         let ctx = egui::Context::default();
@@ -692,7 +692,7 @@ mod tests {
         assert_eq!(ctx.zoom_factor(), 2.0);
         let over = app.canvas_rect.unwrap().center();
         let shown =
-            |app: &mut VectorcraftApp, d: f32| frame(app, &ctx, vec![egui::Event::PointerMoved(over + vec2(d, 0.0))]).platform_output.cursor_image;
+            |app: &mut VectorzApp, d: f32| frame(app, &ctx, vec![egui::Event::PointerMoved(over + vec2(d, 0.0))]).platform_output.cursor_image;
         if OS_CURSORS {
             assert_eq!(shown(&mut app, 0.0).unwrap(), app.canvas.cursors.get(Cursor::Arrow, 1.0).unwrap(), "off: its own size");
             app.run("prefs.set", json!({"key": "scaleCursorWithUi", "value": true})).unwrap();

@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 
 use usvg::roxmltree;
-use vectorcraft_doc::TextObject;
-use vectorcraft_geom::Affine;
+use vectorz_doc::TextObject;
+use vectorz_geom::Affine;
 
 use super::css::{Styles, XNode};
 use super::{Edits, href};

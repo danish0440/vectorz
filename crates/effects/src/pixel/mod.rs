@@ -23,7 +23,7 @@ mod texture;
 mod video;
 
 use serde_json::Value;
-use vectorcraft_geom::{Affine, Point, Rect};
+use vectorz_geom::{Affine, Point, Rect};
 
 use crate::util::{flag, num, text};
 

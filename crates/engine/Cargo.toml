@@ -1,32 +1,32 @@
 [package]
-name = "vectorcraft-engine"
+name = "vectorz-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorCraft engine: sessions, history, selection, the command registry"
+description = "VectorZ engine: sessions, history, selection, the command registry"
 
 [lints]
 workspace = true
 
 [dependencies]
-vectorcraft-geom = { workspace = true }
-vectorcraft-color = { workspace = true }
-vectorcraft-doc = { workspace = true }
-vectorcraft-tools = { workspace = true }
-vectorcraft-text = { workspace = true }
-vectorcraft-render = { workspace = true }
-vectorcraft-pathops = { workspace = true }
-vectorcraft-brush = { workspace = true }
-vectorcraft-trace = { workspace = true }
-vectorcraft-svg = { workspace = true }
-vectorcraft-format = { workspace = true }
-vectorcraft-pdf = { workspace = true }
-vectorcraft-cad = { workspace = true }
-vectorcraft-eps = { workspace = true }
-vectorcraft-metafile = { workspace = true }
-vectorcraft-plugins = { workspace = true }
-vectorcraft-affinity = { workspace = true }
-vectorcraft-scriptcheck = { workspace = true }
+vectorz-geom = { workspace = true }
+vectorz-color = { workspace = true }
+vectorz-doc = { workspace = true }
+vectorz-tools = { workspace = true }
+vectorz-text = { workspace = true }
+vectorz-render = { workspace = true }
+vectorz-pathops = { workspace = true }
+vectorz-brush = { workspace = true }
+vectorz-trace = { workspace = true }
+vectorz-svg = { workspace = true }
+vectorz-format = { workspace = true }
+vectorz-pdf = { workspace = true }
+vectorz-cad = { workspace = true }
+vectorz-eps = { workspace = true }
+vectorz-metafile = { workspace = true }
+vectorz-plugins = { workspace = true }
+vectorz-affinity = { workspace = true }
+vectorz-scriptcheck = { workspace = true }
 image = { workspace = true }
 flate2 = { workspace = true }
 kurbo = { workspace = true }
@@ -36,9 +36,9 @@ thiserror = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-vectorcraft-affinity = { workspace = true, features = ["synth"] }
+vectorz-affinity = { workspace = true, features = ["synth"] }
 crc32fast = { workspace = true }
-vectorcraft-testkit = { workspace = true }
+vectorz-testkit = { workspace = true }
 proptest = { workspace = true }
 wat = { workspace = true }
 # Zstandard streams for the Illustrator editing data fuzz tests.

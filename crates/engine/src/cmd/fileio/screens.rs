@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use vectorcraft_doc::Document;
-use vectorcraft_geom::Rect;
+use vectorz_doc::Document;
+use vectorz_geom::Rect;
 
 use super::super::*;
 use super::encode::single_artboard;
@@ -169,7 +169,7 @@ impl Row {
             return Err(bad(C, "each format is an object {format, scale?, suffix?}"));
         }
         let format = writable(C, Some(str_param(row, "format").unwrap_or("png")), None)?;
-        if matches!(format.id, "vectorcraft" | "template" | "ai" | "txt" | "dxf" | "eps" | "emf" | "wmf") {
+        if matches!(format.id, "vectorz" | "template" | "ai" | "txt" | "dxf" | "eps" | "emf" | "wmf") {
             return Err(bad(C, "Export for Screens writes png, png8, jpg, webp, gif, svg, svgz or pdf"));
         }
         // Vector formats have no pixel size: it doesn't apply and adds no @2x suffix (not even one
@@ -384,7 +384,7 @@ pub(crate) fn export(s: &mut Session, p: &Value) -> Result<Value> {
             } else {
                 if whole.is_none() {
                     let bounds =
-                        vectorcraft_render::encode::art_bounds(&doc).ok_or_else(|| bad(C, "nothing to export: the document has no visible art"))?;
+                        vectorz_render::encode::art_bounds(&doc).ok_or_else(|| bad(C, "nothing to export: the document has no visible art"))?;
                     whole = Some(single_artboard(&doc, bounds, "Document"));
                 }
                 let Some(d) = whole.as_ref() else { continue };
@@ -439,13 +439,13 @@ pub(crate) fn export(s: &mut Session, p: &Value) -> Result<Value> {
                 write_file(&path, &zip)?;
                 Ok(json!({ "path": path, "bytes": zip.len(), "files": names }))
             }
-            None => Ok(json!({ "name": zip_name, "dataBase64": vectorcraft_format::base64_encode(&zip), "bytes": zip.len(), "files": names })),
+            None => Ok(json!({ "name": zip_name, "dataBase64": vectorz_format::base64_encode(&zip), "bytes": zip.len(), "files": names })),
         };
     }
     Ok(match folder {
         Some(_) => json!({ "files": out.written }),
         None => {
-            json!({ "files": out.kept.iter().map(|(name, bytes)| json!({ "name": name, "dataBase64": vectorcraft_format::base64_encode(bytes) })).collect::<Vec<_>>() })
+            json!({ "files": out.kept.iter().map(|(name, bytes)| json!({ "name": name, "dataBase64": vectorz_format::base64_encode(bytes) })).collect::<Vec<_>>() })
         }
     })
 }

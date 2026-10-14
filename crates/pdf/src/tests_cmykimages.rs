@@ -7,10 +7,10 @@ use std::sync::Arc;
 use hayro_syntax::Pdf;
 use hayro_syntax::object::{Array, Name, Object, Stream};
 use serde_json::json;
-use vectorcraft_color::cms::{self, DEVICE_CMYK, GENERIC_CMYK, SRGB};
-use vectorcraft_doc::cmyk::Inks;
-use vectorcraft_doc::{ColorMode, Document, ImageBlob, ImageObject, Node, NodeKind};
-use vectorcraft_geom::Affine;
+use vectorz_color::cms::{self, DEVICE_CMYK, GENERIC_CMYK, SRGB};
+use vectorz_doc::cmyk::Inks;
+use vectorz_doc::{ColorMode, Document, ImageBlob, ImageObject, Node, NodeKind};
+use vectorz_geom::Affine;
 
 use crate::*;
 

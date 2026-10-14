@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use super::{DialogSpec, form};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::state::Dialog;
 
 pub(super) const SPEC: DialogSpec = DialogSpec {
@@ -74,7 +74,7 @@ const PIE_SORT: form::Choices = &[("All", "all"), ("First", "first"), ("None", "
 const GRAPH_TICK_LENGTH: form::Choices = &[("None", "none"), ("Short", "short"), ("Full Width", "full")];
 
 /// Closes before running, so a dialog the command opens stays open.
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let cmd = d.str("__command");
     let mut params = form::params(d);
     if let (Some(o), Some(Value::Object(fixed))) = (params.as_object_mut(), d.fields.get("__params")) {
@@ -82,9 +82,9 @@ fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
     }
     app.ui.dialog = None;
     // A tool's click-to-size shape (Flare) goes on the active perspective plane while the grid shows.
-    let at = |x: &str, y: &str| Some(vectorcraft_geom::Point::new(params.get(x)?.as_f64()?, params.get(y)?.as_f64()?));
+    let at = |x: &str, y: &str| Some(vectorz_geom::Point::new(params.get(x)?.as_f64()?, params.get(y)?.as_f64()?));
     if let Some((c, p)) =
-        at("cx", "cy").or_else(|| at("x", "y")).and_then(|pt| vectorcraft_engine::perspective_click(&app.session, &cmd, &params, pt))
+        at("cx", "cy").or_else(|| at("x", "y")).and_then(|pt| vectorz_engine::perspective_click(&app.session, &cmd, &params, pt))
     {
         return app.run(&c, p);
     }
@@ -94,14 +94,14 @@ fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use vectorcraft_doc::{NodeKind, VerticalAlign};
-    use vectorcraft_engine::Session;
+    use vectorz_doc::{NodeKind, VerticalAlign};
+    use vectorz_engine::Session;
 
     use super::*;
 
     #[test]
     fn area_type_options_choices_match_the_params_doc() {
-        let doc = vectorcraft_engine::find_command("text.areaOptions").unwrap().params;
+        let doc = vectorz_engine::find_command("text.areaOptions").unwrap().params;
         for key in ["firstBaseline", "verticalAlign"] {
             let values: Vec<&str> = choices("text.areaOptions", key).unwrap().iter().map(|(_, v)| *v).collect();
             assert!(doc.contains(&format!("{key}?: {}", values.join("|"))), "{key}: {values:?}");
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn area_type_options_dialog_sets_the_vertical_alignment() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
         let id = app.run("text.create", json!({"x": 20, "y": 20, "text": "Hello", "area": {"width": 200, "height": 200}})).unwrap()["id"]
             .as_u64()
@@ -126,7 +126,7 @@ mod tests {
         out.textures_delta.clear();
         app.ui.dialog.as_mut().unwrap().fields.insert("verticalAlign".into(), json!("center"));
         crate::dialogs::confirm(&mut app).unwrap();
-        let NodeKind::Text(t) = &app.session.doc().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().kind else { panic!("text") };
+        let NodeKind::Text(t) = &app.session.doc().unwrap().doc.node(vectorz_doc::NodeId(id)).unwrap().kind else { panic!("text") };
         assert_eq!(t.area.vertical_align, VerticalAlign::Center);
     }
 
@@ -134,10 +134,10 @@ mod tests {
     /// value axis on the side picked.
     #[test]
     fn graph_type_value_axis_is_a_dropdown_of_its_sides() {
-        let doc = vectorcraft_engine::find_command("graph.setType").unwrap().params;
+        let doc = vectorz_engine::find_command("graph.setType").unwrap().params;
         let values: Vec<&str> = choices("graph.setType", "valueAxis").unwrap().iter().map(|(_, v)| *v).collect();
         assert!(doc.contains(&format!("valueAxis?: {}", values.join("|"))), "{values:?}");
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
         app.run("graph.create", json!({"type": "column", "x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
         crate::menus::graph_dialog(&mut app, "graph.setType").unwrap();

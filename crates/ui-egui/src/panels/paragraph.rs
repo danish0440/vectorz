@@ -4,11 +4,11 @@
 
 use egui::{Ui, vec2};
 use serde_json::{Value, json};
-use vectorcraft_doc::{Composer, Justify, NodeKind, ParaDirection, ParaStyle};
+use vectorz_doc::{Composer, Justify, NodeKind, ParaDirection, ParaStyle};
 
 use super::character::text_style;
 use super::{pstate, set_pstate};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::theme::Tokens;
 use crate::widgets::{self, menu_item};
 
@@ -24,7 +24,7 @@ pub const ALIGNMENTS: [(Justify, &str, &str, &str); 7] = [
 
 /// Paragraph attributes apply to the selected text objects' paragraphs or, while the Type tool
 /// edits text, to the paragraphs its selection (or caret) touches (ending its typing session).
-fn format(app: &mut VectorcraftApp, p: Value) {
+fn format(app: &mut VectorzApp, p: Value) {
     para_cmd(app, "text.setFormat", p);
 }
 
@@ -40,13 +40,13 @@ pub const ALIGN_COMMANDS: [(&str, &str); 5] = [
 
 /// Align the paragraphs of the selected type, or those the Type tool's selection touches, as
 /// `justify` (an [`ALIGN_COMMANDS`] alignment, #1111).
-pub(crate) fn align(app: &mut VectorcraftApp, justify: &str) -> Result<Value, String> {
+pub(crate) fn align(app: &mut VectorzApp, justify: &str) -> Result<Value, String> {
     text_style(app).ok_or("select some type first")?;
     para_cmd(app, "text.setStyle", json!({ "justify": justify }));
     Ok(Value::Null)
 }
 
-fn para_cmd(app: &mut VectorcraftApp, cmd: &str, mut p: Value) {
+fn para_cmd(app: &mut VectorzApp, cmd: &str, mut p: Value) {
     if let Some((id, a, b)) = super::character::text_editing(app) {
         super::character::end_typing(app);
         p["ids"] = json!([id.0]);
@@ -58,7 +58,7 @@ fn para_cmd(app: &mut VectorcraftApp, cmd: &str, mut p: Value) {
 
 /// Does the paragraph being edited (at the caret), else the selected text's first paragraph, run
 /// right to left: its Paragraph Direction, else from its first strong character?
-fn resolved_rtl(app: &VectorcraftApp, para: &ParaStyle) -> bool {
+fn resolved_rtl(app: &VectorzApp, para: &ParaStyle) -> bool {
     let editing = super::character::text_editing(app);
     let text = editing.and_then(|(id, _, _)| match app.session.active().and_then(|d| d.doc.node(id)).map(|n| &n.kind) {
         Some(NodeKind::Text(t)) => Some(t.as_ref()),
@@ -66,8 +66,8 @@ fn resolved_rtl(app: &VectorcraftApp, para: &ParaStyle) -> bool {
     });
     let Some(t) = text.or_else(|| super::character::first_selected_text(app)) else { return para.direction == Some(ParaDirection::RightToLeft) };
     let plain = t.plain_text();
-    let paragraph = vectorcraft_text::edit::paragraph_at(&plain, editing.map_or(0, |(_, a, _)| a));
-    vectorcraft_text::paragraph_is_rtl(plain.get(paragraph).unwrap_or_default(), para.direction)
+    let paragraph = vectorz_text::edit::paragraph_at(&plain, editing.map_or(0, |(_, a, _)| a));
+    vectorz_text::paragraph_is_rtl(plain.get(paragraph).unwrap_or_default(), para.direction)
 }
 
 /// The alignment button that shows `justify` in a paragraph running right to left (`rtl`) or not:
@@ -83,7 +83,7 @@ fn shown_alignment(justify: Justify, rtl: bool) -> Justify {
 /// Add the displayed alignments touched by the byte range (all paragraphs without a range).
 /// Walk forward through run fragments so paragraph lookup never rescans an earlier prefix.
 /// Only Auto needs paragraph text; borrow a fragment until style runs split it.
-fn collect_text_alignment(text: &vectorcraft_doc::TextObject, range: Option<(usize, usize)>, shared: &mut Option<Justify>) -> bool {
+fn collect_text_alignment(text: &vectorz_doc::TextObject, range: Option<(usize, usize)>, shared: &mut Option<Justify>) -> bool {
     use std::borrow::Cow;
     let (a, b) = range.map_or((0, usize::MAX), |(a, b)| (a.min(b), a.max(b)));
     let mut record = |index, plain: &str, start, end| {
@@ -91,7 +91,7 @@ fn collect_text_alignment(text: &vectorcraft_doc::TextObject, range: Option<(usi
             return true;
         }
         let para = text.para_at(index);
-        let rtl = para.justify == Justify::Auto && vectorcraft_text::paragraph_is_rtl(plain, para.direction);
+        let rtl = para.justify == Justify::Auto && vectorz_text::paragraph_is_rtl(plain, para.direction);
         let value = shown_alignment(para.justify, rtl);
         if shared.is_some_and(|old| old != value) {
             return false;
@@ -104,7 +104,7 @@ fn collect_text_alignment(text: &vectorcraft_doc::TextObject, range: Option<(usi
     for run in &text.runs {
         let mut rest = run.text.as_str();
         while !rest.is_empty() {
-            let span = vectorcraft_text::edit::paragraph_at(rest, 0);
+            let span = vectorz_text::edit::paragraph_at(rest, 0);
             let part = rest.get(span.clone()).unwrap_or_default();
             let para = text.para_at(index);
             if para.justify == Justify::Auto && !part.is_empty() {
@@ -137,7 +137,7 @@ fn collect_text_alignment(text: &vectorcraft_doc::TextObject, range: Option<(usi
 }
 
 /// None means differing displayed alignments, following the other mixed-value controls.
-fn selected_alignment(app: &VectorcraftApp, fallback: &ParaStyle) -> Option<Justify> {
+fn selected_alignment(app: &VectorzApp, fallback: &ParaStyle) -> Option<Justify> {
     let default = Some(shown_alignment(fallback.justify, fallback.direction == Some(ParaDirection::RightToLeft)));
     let Some(st) = app.session.active() else { return default };
     let mut shared = None;
@@ -146,7 +146,7 @@ fn selected_alignment(app: &VectorcraftApp, fallback: &ParaStyle) -> Option<Just
     {
         return if collect_text_alignment(text, Some((a, b)), &mut shared) { shared.or(default) } else { None };
     }
-    fn collect(node: &vectorcraft_doc::Node, shared: &mut Option<Justify>) -> bool {
+    fn collect(node: &vectorz_doc::Node, shared: &mut Option<Justify>) -> bool {
         if let NodeKind::Text(text) = &node.kind {
             return collect_text_alignment(text, None, shared);
         }
@@ -162,7 +162,7 @@ fn selected_alignment(app: &VectorcraftApp, fallback: &ParaStyle) -> Option<Just
 
 /// The seven alignment buttons shared by Paragraph and Properties; no button is selected
 /// when the paragraphs they act on have differing displayed alignments.
-pub fn alignment_buttons(app: &mut VectorcraftApp, ui: &mut Ui, para: &ParaStyle, size: f32) {
+pub fn alignment_buttons(app: &mut VectorzApp, ui: &mut Ui, para: &ParaStyle, size: f32) {
     let shown = selected_alignment(app, para);
     for (j, icon, tip, id) in ALIGNMENTS {
         if widgets::icon_button(ui, icon, tip, shown == Some(j), size).clicked() {
@@ -172,13 +172,13 @@ pub fn alignment_buttons(app: &mut VectorcraftApp, ui: &mut Ui, para: &ParaStyle
 }
 
 /// The Hyphenate checkbox of `para`'s paragraphs.
-pub fn hyphenate_check(app: &mut VectorcraftApp, ui: &mut Ui, para: &ParaStyle) {
+pub fn hyphenate_check(app: &mut VectorzApp, ui: &mut Ui, para: &ParaStyle) {
     if widgets::check(ui, tl!("Hyphenate"), para.hyphenate, true) {
         format(app, json!({"hyphenate": !para.hyphenate}));
     }
 }
 
-pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn show(app: &mut VectorzApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((_, para)) = text_style(app) else {
         super::empty_state(ui, "pilcrow", tl!("No text selected"), tl!("Select a text object to edit its paragraph attributes."));
@@ -246,7 +246,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             widgets::dim_label(ui, tl!("Mojikumi Set"));
             let sets = [tl!("None"), tl!("Line-end Punctuation Half Width")];
-            let current = if para.mojikumi == vectorcraft_doc::Mojikumi::LineEndHalf { sets[1] } else { sets[0] };
+            let current = if para.mojikumi == vectorz_doc::Mojikumi::LineEndHalf { sets[1] } else { sets[0] };
             // Already translated: shown as they are.
             if let Some(i) = widgets::dropdown_names(ui, "pa-mojikumi", current, &sets, ui.available_width() - 4.0) {
                 format(app, json!({"mojikumi": if i == 1 { "lineEndHalf" } else { "none" }}));
@@ -254,7 +254,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
         });
         // Which characters may not start or end a line.
         ui.horizontal(|ui| {
-            use vectorcraft_doc::Kinsoku;
+            use vectorz_doc::Kinsoku;
             widgets::dim_label(ui, tl!("Kinsoku Set"));
             let sets = [(tl!("None"), Kinsoku::None, "none"), (tl!("Hard"), Kinsoku::Hard, "hard"), (tl!("Soft"), Kinsoku::Soft, "soft")];
             let names = sets.map(|s| s.0);
@@ -269,7 +269,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
-pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
+pub fn menu(app: &mut VectorzApp, ui: &mut Ui) {
     let style = text_style(app);
     let has = style.is_some();
     let hidden: bool = pstate(ui.ctx(), "pa-hide-options");
@@ -284,7 +284,7 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
     // the East Asian options.
     if app.session.prefs.show_east_asian_options {
         ui.separator();
-        let top_to_top = style.as_ref().is_some_and(|(_, p)| p.leading_model == vectorcraft_doc::LeadingModel::EmBoxTop);
+        let top_to_top = style.as_ref().is_some_and(|(_, p)| p.leading_model == vectorz_doc::LeadingModel::EmBoxTop);
         if menu_item(ui, tl!("Top-to-Top Leading"), has, top_to_top) {
             format(app, json!({"leadingModel": "emBoxTop"}));
         }
@@ -296,7 +296,7 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
         ui.add_enabled_ui(has, |ui| {
             // Indented like the items beside it (their check column).
             ui.menu_button(format!("   {}", tl!("Burasagari")), |ui| {
-                use vectorcraft_doc::Burasagari;
+                use vectorz_doc::Burasagari;
                 for (label, b, key) in [
                     (tl!("None"), Burasagari::None, "none"),
                     (tl!("Regular"), Burasagari::Standard, "standard"),
@@ -331,9 +331,9 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_engine::Session;
+    use vectorz_engine::Session;
 
-    fn alignment_row(app: &mut VectorcraftApp, ui: &mut Ui, size: f32) -> egui::Rect {
+    fn alignment_row(app: &mut VectorzApp, ui: &mut Ui, size: f32) -> egui::Rect {
         let para = text_style(app).map_or_else(ParaStyle::default, |(_, p)| p);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
@@ -344,7 +344,7 @@ mod tests {
     }
 
     // Inspect the actual selected wells, including the shared Properties-size buttons.
-    fn alignment_frame(ctx: &egui::Context, app: &mut VectorcraftApp, size: f32) -> (Vec<Justify>, egui::Pos2) {
+    fn alignment_frame(ctx: &egui::Context, app: &mut VectorzApp, size: f32) -> (Vec<Justify>, egui::Pos2) {
         let mut row = egui::Rect::NOTHING;
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| row = alignment_row(app, ui, size));
         frame.textures_delta.clear();
@@ -370,17 +370,17 @@ mod tests {
         (selected, centers[1])
     }
 
-    fn editing_text(text: &str) -> (VectorcraftApp, Value) {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    fn editing_text(text: &str) -> (VectorzApp, Value) {
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
         app.session.select_tool("type", Default::default()).unwrap();
         let id = app.run("text.create", json!({"x": 20, "y": 50, "text": text})).unwrap()["id"].clone();
-        app.session.apply_actions(vec![vectorcraft_tools::Action::Notify("text.editNew".into())]).unwrap();
+        app.session.apply_actions(vec![vectorz_tools::Action::Notify("text.editNew".into())]).unwrap();
         assert!(super::super::character::text_editing(&app).is_some());
         (app, id)
     }
 
-    fn select_range(app: &mut VectorcraftApp, start: usize, end: usize) {
+    fn select_range(app: &mut VectorzApp, start: usize, end: usize) {
         app.session.set_tool_option("select", &json!({"start": start, "end": end}));
     }
 
@@ -401,7 +401,7 @@ mod tests {
             alignment_row(app, ui, 28.0);
         });
         assert_eq!(alignment_frame(&ctx, &mut app, 28.0).0, [Justify::Center]);
-        let node = app.session.active().unwrap().doc.node(vectorcraft_doc::NodeId(id.as_u64().unwrap())).unwrap();
+        let node = app.session.active().unwrap().doc.node(vectorz_doc::NodeId(id.as_u64().unwrap())).unwrap();
         let NodeKind::Text(text) = &node.kind else { panic!("text") };
         assert_eq!(
             (text.para_at(0).justify, text.para_at(1).justify, text.para_at(2).justify),
@@ -523,10 +523,10 @@ mod tests {
     /// direction: Auto then follows it.
     #[test]
     fn alignment_buttons_show_the_resolved_alignment_and_direction_sets_it() {
-        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let mut app = VectorzApp::new(Session::new(), Default::default());
         app.session.execute("file.new", &json!({"width": 400, "height": 200})).unwrap();
         app.session.execute("text.create", &json!({"x": 200, "y": 50, "text": "שלום"})).unwrap();
-        let shown = |app: &VectorcraftApp| {
+        let shown = |app: &VectorzApp| {
             let para = text_style(app).unwrap().1;
             shown_alignment(para.justify, resolved_rtl(app, &para))
         };
@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(shown(&app), Justify::Left);
         // The direction buttons show with the Indic options only.
         crate::i18n::set_current(crate::i18n::Lang::EN);
-        let tips = |app: &mut VectorcraftApp| {
+        let tips = |app: &mut VectorzApp| {
             let ctx = egui::Context::default();
             let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui));
             frame.textures_delta.clear();

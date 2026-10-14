@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash};
 use std::mem::size_of;
 
-use vectorcraft_doc::Node;
-use vectorcraft_geom::{Anchor, BezPath, SubPath};
+use vectorz_doc::Node;
+use vectorz_geom::{Anchor, BezPath, SubPath};
 
 use crate::PtrHasher;
 

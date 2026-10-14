@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=VectorZ
+GenericName=Vector Graphics Editor
+Comment=Draw and edit vector illustrations, SVG and PDF
+Exec=vectorz %F
+TryExec=vectorz
+Icon=com.pintaz.vectorz
+Terminal=false
+StartupNotify=true
+StartupWMClass=com.pintaz.vectorz
+Categories=Graphics;2DGraphics;VectorGraphics;
+Keywords=vector;illustration;svg;pdf;drawing;bezier;
+MimeType=image/svg+xml;application/pdf;

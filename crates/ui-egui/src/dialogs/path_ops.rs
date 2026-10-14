@@ -1,10 +1,10 @@
 //! Path dialogs: Average, and Offset Path, Simplify and Split Into Grid with Preview.
 
 use serde_json::{Value, json};
-use vectorcraft_doc::Unit;
+use vectorz_doc::Unit;
 
 use super::{DialogSpec, form, run_and_close};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::state::Dialog;
 
 pub(super) const SPEC: DialogSpec = DialogSpec { heading: |d| title(&d.kind).into(), body, confirm, preview: true, ..DialogSpec::FORM };
@@ -87,7 +87,7 @@ fn split_grid(ui: &mut egui::Ui, d: &mut Dialog, unit: Unit) {
     form::check(ui, d, "addGuides", tl!("Add Guides"));
 }
 
-fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let unit = app.session.general_unit();
     if d.kind == "splitIntoGrid" {
         split_grid(ui, d, unit);
@@ -115,7 +115,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     false
 }
 
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let (id, params) = command(d);
     if previewed(&d.kind).is_none() {
         return run_and_close(app, id, params);

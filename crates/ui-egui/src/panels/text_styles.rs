@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use super::character::{end_typing, text_editing, text_style};
 use super::{pstate, selection_len, set_pstate};
-use crate::VectorcraftApp;
+use crate::VectorzApp;
 use crate::theme::Tokens;
 use crate::widgets::{self, menu_item};
 
@@ -36,7 +36,7 @@ impl Kind {
 }
 
 /// (name, attrs, uses) for every style, Normal first.
-fn styles(app: &mut VectorcraftApp, kind: Kind) -> Vec<(String, Map<String, Value>, u64)> {
+fn styles(app: &mut VectorzApp, kind: Kind) -> Vec<(String, Map<String, Value>, u64)> {
     let v = app.session.execute(&format!("{}.list", kind.prefix()), &json!({})).unwrap_or_default();
     v["styles"]
         .as_array()
@@ -55,7 +55,7 @@ fn styles(app: &mut VectorcraftApp, kind: Kind) -> Vec<(String, Map<String, Valu
 }
 
 /// The selection's style name (Normal when none) and its attributes, if text is selected.
-fn current(app: &VectorcraftApp, kind: Kind) -> Option<(Option<String>, Map<String, Value>)> {
+fn current(app: &VectorzApp, kind: Kind) -> Option<(Option<String>, Map<String, Value>)> {
     let (c, p) = text_style(app)?;
     let v = match kind {
         Kind::Char => serde_json::to_value(&c),
@@ -73,7 +73,7 @@ fn current(app: &VectorcraftApp, kind: Kind) -> Option<(Option<String>, Map<Stri
 
 /// Parameters targeting the selection: the Type tool's selected characters (paragraph styles: the
 /// paragraphs its selection or caret touches), or the selected objects.
-fn target(app: &VectorcraftApp, kind: Kind, mut p: Value) -> Value {
+fn target(app: &VectorzApp, kind: Kind, mut p: Value) -> Value {
     if let Some((id, a, b)) = text_editing(app) {
         p["id"] = json!(id.0);
         if kind == Kind::Para || b > a {
@@ -84,7 +84,7 @@ fn target(app: &VectorcraftApp, kind: Kind, mut p: Value) -> Value {
     p
 }
 
-pub fn show(app: &mut VectorcraftApp, ui: &mut Ui, kind: Kind) {
+pub fn show(app: &mut VectorzApp, ui: &mut Ui, kind: Kind) {
     let t = Tokens::get(ui.ctx());
     let all = styles(app, kind);
     let cur = current(app, kind);
@@ -157,7 +157,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui, kind: Kind) {
     });
 }
 
-pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui, kind: Kind) {
+pub fn menu(app: &mut VectorzApp, ui: &mut Ui, kind: Kind) {
     let sel: Option<String> = pstate(ui.ctx(), kind.key());
     let normal = if kind == Kind::Char { "[Normal Character Style]" } else { "[Normal Paragraph Style]" };
     let user = sel.as_ref().is_some_and(|s| s != normal);
@@ -201,13 +201,13 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui, kind: Kind) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vectorcraft_doc::{NodeId, NodeKind};
+    use vectorz_doc::{NodeId, NodeKind};
 
     use super::super::tests_appearance::{click, frame_events, text_rect};
 
     #[test]
     fn panels_draw_and_apply_headless() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
         let id = app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Hi"})).unwrap()["id"].clone();
         app.session.execute("select.set", &json!({"ids": [id]})).unwrap();
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn auto_leading_style_marks_only_real_overrides() {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
         let id = app.run("text.create", json!({"x": 10, "y": 40, "text": "Hi"})).unwrap()["id"].clone();
         app.run("select.set", json!({"ids": [id]})).unwrap();
@@ -243,8 +243,8 @@ mod tests {
         assert!(shown.lines().any(|line| line == "Automatic"), "no override after clearing: {shown}");
     }
 
-    fn capture_app() -> (VectorcraftApp, NodeId, egui::Context) {
-        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+    fn capture_app() -> (VectorzApp, NodeId, egui::Context) {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
         app.run("charStyle.new", json!({"name": "Untouched", "attrs": {"size": 22}})).unwrap();
         let other = app.run("text.create", json!({"x": 20, "y": 100, "text": "Other", "size": 22})).unwrap()["id"].clone();
@@ -257,10 +257,10 @@ mod tests {
         (app, id, ctx)
     }
 
-    fn select_type_range(app: &mut VectorcraftApp, id: NodeId, start: usize, end: usize) {
+    fn select_type_range(app: &mut VectorzApp, id: NodeId, start: usize, end: usize) {
         // The same editing handshake and selection API as character::tests::scaled_range_fields_follow_the_type_tool_selection.
         app.session.select_tool("type", Default::default()).unwrap();
-        app.session.apply_actions(vec![vectorcraft_tools::Action::Notify("text.editNew".into())]).unwrap();
+        app.session.apply_actions(vec![vectorz_tools::Action::Notify("text.editNew".into())]).unwrap();
         app.session.set_tool_option("select", &json!({"start": start, "end": end}));
         super::super::character::end_typing(app);
         assert_eq!(app.session.tool_options()["typing"], json!(false));
@@ -270,7 +270,7 @@ mod tests {
 
     /// Click production panel/menu content with the existing hover/press/release helper.
     /// A live range guard and command counter distinguish a dispatch failure from a missed click or lost Type selection.
-    fn click_style_ui(ctx: &egui::Context, app: &mut VectorcraftApp, id: NodeId, range: Option<(usize, usize)>, is_menu: bool, label: &str) {
+    fn click_style_ui(ctx: &egui::Context, app: &mut VectorzApp, id: NodeId, range: Option<(usize, usize)>, is_menu: bool, label: &str) {
         let expected = range.map(|(start, end)| (id, start, end));
         let mut expected_target = json!({});
         if let Some((start, end)) = range {
@@ -282,7 +282,7 @@ mod tests {
         }
         let commands = app.run_count;
         let mut dispatched = false;
-        let mut draw = |app: &mut VectorcraftApp, ui: &mut egui::Ui| {
+        let mut draw = |app: &mut VectorzApp, ui: &mut egui::Ui| {
             // On the release frame this is immediately before the production menu/row handles the click and builds its target.
             assert_eq!(text_editing(app), expected, "Type selection before {label}");
             assert_eq!(target(app, Kind::Char, json!({})), expected_target, "actual panel target before {label}");
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(text_editing(app), expected, "Type selection after {label}");
     }
 
-    fn text_runs(app: &VectorcraftApp, id: NodeId) -> Vec<(String, f64, Option<String>)> {
+    fn text_runs(app: &VectorzApp, id: NodeId) -> Vec<(String, f64, Option<String>)> {
         let st = app.session.doc().unwrap();
         let NodeKind::Text(text) = &st.doc.node(id).unwrap().kind else { panic!("expected text") };
         text.runs.iter().map(|r| (r.text.clone(), r.style.size, r.style.style_name.clone())).collect()
@@ -456,23 +456,23 @@ mod tests {
 
     /// Feed real text/shortcut events through the canvas Type routing. No focus reset or typing
     /// settlement here: the capture dispatch itself must close the live typing interaction.
-    fn capture_input(ctx: &egui::Context, app: &mut VectorcraftApp, events: Vec<egui::Event>) {
+    fn capture_input(ctx: &egui::Context, app: &mut VectorzApp, events: Vec<egui::Event>) {
         frame_events(ctx, app, events, |app, ui| {
             crate::shortcuts::handle(app, ui.ctx());
             menu(app, ui, Kind::Char);
         });
     }
 
-    fn click_new_style_footer(ctx: &egui::Context, app: &mut VectorcraftApp, id: NodeId) {
+    fn click_new_style_footer(ctx: &egui::Context, app: &mut VectorzApp, id: NodeId) {
         click_new_style_footer_range(ctx, app, id, (0, 5));
     }
 
-    fn click_new_style_footer_range(ctx: &egui::Context, app: &mut VectorcraftApp, id: NodeId, range: (usize, usize)) {
+    fn click_new_style_footer_range(ctx: &egui::Context, app: &mut VectorzApp, id: NodeId, range: (usize, usize)) {
         let (start, end) = range;
         let pos = std::cell::Cell::new(egui::Pos2::ZERO);
         let commands = app.run_count;
         let mut dispatched = false;
-        let mut draw = |app: &mut VectorcraftApp, ui: &mut egui::Ui| {
+        let mut draw = |app: &mut VectorzApp, ui: &mut egui::Ui| {
             assert_eq!(text_editing(app), Some((id, start, end)));
             assert_eq!(target(app, Kind::Char, json!({})), json!({"id": id.0, "start": start, "end": end}));
             ui.set_width(280.0);
@@ -522,7 +522,7 @@ mod tests {
         let selection = app.session.doc().unwrap().selection.clone();
         let undo = app.session.doc().unwrap().history.undo.len();
         app.session.select_tool("type", Default::default()).unwrap();
-        app.session.apply_actions(vec![vectorcraft_tools::Action::Notify("text.editNew".into())]).unwrap();
+        app.session.apply_actions(vec![vectorz_tools::Action::Notify("text.editNew".into())]).unwrap();
         assert_eq!(text_editing(&app), Some((id, 0, 6)));
         capture_input(&ctx, &mut app, vec![egui::Event::Text("Typed".into())]);
         assert_eq!(text_runs(&app, id), vec![("Typed".into(), 18.0, link.clone())]);

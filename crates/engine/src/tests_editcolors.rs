@@ -1,9 +1,9 @@
 //! Edit → Edit Colors: Adjust Color Balance modes and the live preview.
 
 use serde_json::{Value, json};
-use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::Node;
-use vectorcraft_tools::{PointerEvent, PointerKind};
+use vectorz_color::{Color, Paint};
+use vectorz_doc::Node;
+use vectorz_tools::{PointerEvent, PointerKind};
 
 use super::*;
 use crate::tooling::ViewInfo;
@@ -169,9 +169,9 @@ fn pixels(s: &Session, id: NodeId) -> Vec<[u8; 4]> {
 fn image_node(s: &mut Session) -> NodeId {
     let bytes = png([[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 128]]);
     s.edit("Place", |d, sel| {
-        d.images.insert("pic".into(), vectorcraft_doc::ImageBlob::png(bytes));
+        d.images.insert("pic".into(), vectorz_doc::ImageBlob::png(bytes));
         let id = d.alloc_id();
-        let im = vectorcraft_doc::ImageObject {
+        let im = vectorz_doc::ImageObject {
             key: "pic".into(),
             width: 2,
             height: 2,
