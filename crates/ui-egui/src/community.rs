@@ -1,6 +1,6 @@
 //! Community and project links: the Discord button (header, About, Home) and the link list.
 //! Icons are Lucide's (ISC); Discord's own logo is a trademark, so the button uses a chat icon
-//! on GitHub's colour with the word "Discord".
+//! on GitHub's colour with the word "Help".
 
 use egui::{Color32, CornerRadius, Sense, Ui, vec2};
 
@@ -12,7 +12,7 @@ const DISCORD: Color32 = Color32::from_rgb(0x58, 0x65, 0xF2);
 
 /// The Discord button's label, height and width.
 fn discord_layout(ui: &Ui, large: bool) -> (std::sync::Arc<egui::Galley>, f32, f32) {
-    let (h, font, label) = if large { (36.0, theme::semibold(14.0), tl!("Get help on GitHub")) } else { (24.0, theme::semibold(12.0), "Discord") };
+    let (h, font, label) = if large { (36.0, theme::semibold(14.0), tl!("Get help on GitHub")) } else { (24.0, theme::semibold(12.0), "Help") };
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, Color32::WHITE);
     let w = galley.size().x + h * 0.55 + h * 0.9;
     (galley, h, w)
