@@ -4,7 +4,7 @@
 
 use serde_json::{Map, Value, json};
 use vectorz_doc::metadata::{MAX_RATING, iso8601};
-use vectorcraft_doc::{ColorMode, CopyrightStatus, DocMetadata, Document};
+use vectorz_doc::{ColorMode, CopyrightStatus, DocMetadata, Document};
 
 use super::*;
 

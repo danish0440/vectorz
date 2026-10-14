@@ -6,7 +6,7 @@
 //! step. On an error the dialog stays open.
 
 use serde_json::{Value, json};
-use vectorcraft_doc::CopyrightStatus;
+use vectorz_doc::CopyrightStatus;
 use vectorz_doc::metadata::MAX_RATING;
 
 use super::document_setup::{LABEL, choice};
@@ -224,7 +224,7 @@ mod tests {
         assert!(app.ui.dialog.is_none());
         let st = app.session.active().unwrap();
         let m = &st.doc.metadata;
-        assert_eq!((m.author.as_str(), m.rating, m.copyright_status), ("Ada", 4, vectorcraft_doc::CopyrightStatus::Copyrighted));
+        assert_eq!((m.author.as_str(), m.rating, m.copyright_status), ("Ada", 4, vectorz_doc::CopyrightStatus::Copyrighted));
         assert_eq!(m.keywords, ["poster", "print", "blue"], "typed keywords join the chips, each once");
         assert_eq!(st.history.undo.len(), 1);
         // A bad value keeps the dialog open.

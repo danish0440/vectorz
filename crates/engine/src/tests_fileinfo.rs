@@ -2,7 +2,7 @@
 //! PNG and SVG metadata it writes.
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{CopyrightStatus, DocMetadata};
+use vectorz_doc::{CopyrightStatus, DocMetadata};
 
 use super::*;
 

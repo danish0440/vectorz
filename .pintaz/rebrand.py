@@ -58,7 +58,7 @@ BIN_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".icns", ".ttf", ".
            ".zip", ".gz", ".xz", ".zst", ".bin", ".wasm", ".mp4", ".mov", ".wav", ".mp3", ".flac", ".ogg", ".tif", ".tiff",
            ".heic", ".avif", ".exr", ".dng", ".cr2", ".nef", ".arw", ".docx", ".xlsx", ".pptx", ".dwg", ".dxf", ".idml", ".indd",
            ".kra", ".ai", ".eps", ".jxl", ".qoi", ".bmp", ".pcx", ".tga", ".hdr", ".dds", ".ktx2", ".spv", ".a", ".lib", ".so", ".dll"}
-COPYRIGHT_LINE = re.compile(r"(?i)copyright|©|\(c\) 20")
+COPYRIGHT_LINE = re.compile(r"(?i)copyright\s*(\(c\)|©|\d{4})|©|\(c\) 20\d\d")
 
 PALETTE = {"paper": (251, 246, 234), "cream": (244, 239, 230), "jade": (31, 77, 58), "mustard": (211, 162, 80), "ink": (26, 36, 34)}
 
@@ -189,22 +189,34 @@ def transform_text(text: str, up_id: str, launcher: bool, path: Path) -> str:
                 line = line.replace("'LICENSE-APACHE'", "'LICENSE-APACHE', 'NOTICE'")
             elif re.search(r"\bfor \w+ in .*LICENSE-APACHE", line):
                 line = line.replace("LICENSE-APACHE", "LICENSE-APACHE NOTICE", 1)
+        def tx(line):
+            for rx, fn in rules:
+                line = rx.sub(fn, line)
+            for o in others:
+                if o[0] == "full":
+                    line = rename_own(line, o[1])
+                else:
+                    line = o[0].sub(o[1], line)
+            line = rename_own(line, up_id)
+            line = line.replace("ai.storyteller.", "com.pintaz.")
+            line = line.replace("docs/brand/artcraft-", "assets/z-brand/")
+            line = line.replace("docs\\brand\\artcraft-", "assets\\z-brand\\")
+            line = line.replace("docs\\\\brand\\\\artcraft-", "assets\\\\z-brand\\\\")
+            return line
         if COPYRIGHT_LINE.search(line) and not re.search(r"\bfor \w+ in ", line):
-            out.append(line)
-            continue
-        for rx, fn in rules:
-            line = rx.sub(fn, line)
-        for o in others:
-            if o[0] == "full":
-                line = rename_own(line, o[1])
+            if path.suffix == ".rs":
+                # a copyright notice inside code: the notice text (string literals) stays, the code is renamed
+                parts, pos = [], 0
+                for m in _STR.finditer(line):
+                    parts.append(tx(line[pos:m.start()]))
+                    parts.append(m.group(0))
+                    pos = m.end()
+                parts.append(tx(line[pos:]) if not line[pos:].lstrip().startswith("//") else line[pos:])
+                out.append("".join(parts))
             else:
-                line = o[0].sub(o[1], line)
-        line = rename_own(line, up_id)
-        line = line.replace("ai.storyteller.", "com.pintaz.")
-        line = line.replace("docs/brand/artcraft-", "assets/z-brand/")
-        line = line.replace("docs\\brand\\artcraft-", "assets\\z-brand\\")
-        line = line.replace("docs\\\\brand\\\\artcraft-", "assets\\\\z-brand\\\\")
-        out.append(line)
+                out.append(line)
+            continue
+        out.append(tx(line))
     text = "\n".join(out)
     if path.suffix == ".tsv":
         text = fix_tsv(text).replace("ArtCraft", "Upstream")
@@ -255,7 +267,7 @@ def is_text(p: Path) -> bool:
         b = p.read_bytes()
     except OSError:
         return False
-    if b"\0" in b[:65536]:
+    if b"\0" in b[:65536] and p.suffix.lower() not in (".rs", ".toml", ".ps1", ".sh", ".wxs", ".plist", ".in"):
         return False
     try:
         b.decode("utf-8")
