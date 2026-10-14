@@ -30,7 +30,7 @@
 	About VectorZ	O programie VectorZ
 	Align to Path	Wyrównaj do ścieżki
 	Cut Path at Selected Anchor Points	Rozetnij ścieżkę w zaznaczonych punktach kontrolnych
-	Join Our Discord	Dołącz do naszego Discorda
+	Get help on GitHub	Get help on GitHub
 	Language	Język
 	UI Brightness	Jasność interfejsu
 	Dark	Ciemny
@@ -605,7 +605,7 @@
 	Symbol Libraries	Biblioteki symboli
 	Help	Pomoc
 	Upstream project	Upstream project
-	VectorZ on getartcraft.com	VectorZ w getartcraft.com
+	VectorZ on GitHub	VectorZ on GitHub
 	VectorZ on GitHub	VectorZ w serwisie GitHub
 	Search Commands…	Szukaj poleceń…
 	VectorZ Help…	Pomoc VectorZ…
@@ -1739,7 +1739,7 @@ lighting	Light	Światło
 	Select All Bound Objects	Zaznacz wszystkie powiązane obiekty
 	Multiple objects	Wiele obiektów
 	Graphics: {adapter}	Grafika: {adapter}
-	Part of Upstream. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	Część Upstream. MIT LUB Apache-2.0. Czcionki: Source Sans 3, Inter, JetBrains Mono (OFL). Ikony: Lucide (ISC) + VectorZ.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.
 	Version {version} — open-source vector illustration in pure Rust.	Wersja {version} — otwartoźródłowa grafika wektorowa w czystym Ruście.
 	Align to Page	Wyrównaj do strony
 	Smooth Color	Gładki kolor
@@ -3355,10 +3355,10 @@ effect	Regular	Normalny
 	Recent Files	Ostatnie pliki
 	Vector illustration — fast, open, scriptable.	Ilustracja wektorowa — szybka, otwarta, skryptowalna.
 	Welcome to VectorZ	Witamy w VectorZ
-	Upstream website	Strona Upstream
+	Upstream project	Upstream project
 	Discord	Discord
-	Join our Discord	Dołącz do naszego Discorda
-	Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
+	Get help on GitHub	Get help on GitHub
+	Join the community on GitHub	Join the community on GitHub
 	Source code on GitHub	Kod źródłowy w serwisie GitHub
 	All Tools	Wszystkie narzędzia
 	Draw	Rysuj

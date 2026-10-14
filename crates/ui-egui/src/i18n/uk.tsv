@@ -223,7 +223,7 @@
 	Artboard:	Монтажна область:
 	Artboards	Монтажні області
 	Upstream project	Upstream project
-	Upstream website	Веб-сайт Upstream
+	Upstream project	Upstream project
 	Artwork Colors	Кольори малюнка
 	As Multiple Assets	Як кілька ресурсів
 	As Single Asset	Як один ресурс
@@ -1368,9 +1368,9 @@
 	Italian	Італійська
 	Japanese	Японська
 	Join	З’єднати
-	Join Our Discord	Приєднуйтесь до нашого Discord
-	Join our Discord	Приєднуйтесь до нашого Discord
-	Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
+	Get help on GitHub	Get help on GitHub
+	Get help on GitHub	Get help on GitHub
+	Join the community on GitHub	Join the community on GitHub
 	Join the lines of each paragraph	Поєднувати рядки кожного абзацу
 	Join Tool	Інструмент «З’єднання»
 	Justification…	Вирівнювання за шириною…
@@ -1963,7 +1963,7 @@
 	Paragraph Style Options	Параметри стилю абзацу
 	Paragraph Styles	Стилі абзаців
 	Paragraph Symbol	Символ абзацу
-	Part of Upstream. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	Частина Upstream. MIT OR Apache-2.0. Шрифти: Source Sans 3, Inter, JetBrains Mono (OFL). Значки: Lucide (ISC) + VectorZ.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.
 	Password	Пароль
 	Paste	Вставити
 	Paste in Back	Вставити позаду
@@ -3193,7 +3193,7 @@ effect	Points	Точки
 	Vector illustration — fast, open, scriptable.	Векторне малювання — швидке, відкрите, кероване сценаріями.
 	VectorZ didn't quit normally last time. These documents had unsaved changes:	VectorZ не завершився нормально минулого разу. У цих документах були незбережені зміни:
 	VectorZ Help…	Довідка VectorZ…
-	VectorZ on getartcraft.com	VectorZ на getartcraft.com
+	VectorZ on GitHub	VectorZ on GitHub
 	VectorZ on GitHub	VectorZ на GitHub
 	Vectors	Вектори
 	Version {version} — open-source vector illustration in pure Rust.	Версія {version} — векторне малювання з відкритим кодом, написане на Rust.

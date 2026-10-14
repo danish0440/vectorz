@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
-/// The app's id on getartcraft.com and GitHub.
+/// The app's id on GitHub and GitHub.
 pub const APP_ID: &str = "vectorz";
 pub const DISCORD_URL: &str = "https://github.com/danish0440/vectorz/issues";
 pub const WEBSITE_URL: &str = "https://github.com/danish0440/vectorz";
@@ -22,9 +22,9 @@ pub fn github_url() -> String {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "help.discord", "Join Our Discord", ["Help"], None, "{} → {url} the ArtCraft community Discord", always, |_, _| url(DISCORD_URL.into())),
+        cmd!(query "help.discord", "Get help on GitHub", ["Help"], None, "{} → {url} this app's GitHub issues", always, |_, _| url(DISCORD_URL.into())),
         cmd!(query "help.website", "Upstream project", ["Help"], None, "{} → {url}", always, |_, _| url(WEBSITE_URL.into())),
-        cmd!(query "help.appPage", "VectorZ on getartcraft.com", ["Help"], None, "{} → {url} this app's page", always, |_, _| url(app_page_url())),
+        cmd!(query "help.appPage", "VectorZ on GitHub", ["Help"], None, "{} → {url} this app's page", always, |_, _| url(app_page_url())),
         cmd!(query "help.github", "VectorZ on GitHub", ["Help"], None, "{} → {url} source code, issues and releases", always, |_, _| url(github_url())),
         cmd!(query "help.links", "Links", [], None, "{} → {discord, website, appPage, github}", always, |_, _| {
             Ok(json!({ "discord": DISCORD_URL, "website": WEBSITE_URL, "appPage": app_page_url(), "github": github_url() }))

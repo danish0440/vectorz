@@ -211,7 +211,7 @@
 	Artboard:	Zeichenfläche:
 	Artboards	Zeichenflächen
 	Upstream project	Upstream project
-	Upstream website	Upstream-Website
+	Upstream project	Upstream project
 	Artwork Colors	Farben der Grafik
 	As Multiple Assets	Als mehrere Assets
 	As Single Asset	Als einzelnes Asset
@@ -1356,9 +1356,9 @@
 	Italian	Italienisch
 	Japanese	Japanisch
 	Join	Zusammenfügen
-	Join Our Discord	Unserem Discord beitreten
-	Join our Discord	Unserem Discord beitreten
-	Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
+	Get help on GitHub	Get help on GitHub
+	Get help on GitHub	Get help on GitHub
+	Join the community on GitHub	Join the community on GitHub
 	Join the lines of each paragraph	Die Zeilen jedes Absatzes verbinden
 	Join Tool	Zusammenfügen-Werkzeug
 	Justification…	Abstände…
@@ -1920,7 +1920,7 @@
 	Paragraph Style Options	Absatzformatoptionen
 	Paragraph Styles	Absatzformate
 	Paragraph Symbol	Absatzmarke
-	Part of Upstream. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	Teil von Upstream. MIT OR Apache-2.0. Schriften: Source Sans 3, Inter, JetBrains Mono (OFL). Symbole: Lucide (ISC) + VectorZ.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.
 	Password	Kennwort
 	Paste	Einfügen
 	Paste in Back	Dahinter einfügen
@@ -3100,7 +3100,7 @@ effect	Points	Punkte
 	Vector illustration — fast, open, scriptable.	Vektorillustration – schnell, offen, skriptfähig.
 	VectorZ didn't quit normally last time. These documents had unsaved changes:	VectorZ wurde beim letzten Mal nicht normal beendet. Diese Dokumente hatten ungespeicherte Änderungen:
 	VectorZ Help…	VectorZ-Hilfe…
-	VectorZ on getartcraft.com	VectorZ auf getartcraft.com
+	VectorZ on GitHub	VectorZ on GitHub
 	VectorZ on GitHub	VectorZ auf GitHub
 	Vectors	Vektoren
 	Version {version} — open-source vector illustration in pure Rust.	Version {version} – Open-Source-Vektorillustration in reinem Rust.

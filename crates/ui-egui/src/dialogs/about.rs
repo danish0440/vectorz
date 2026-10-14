@@ -57,6 +57,9 @@ fn about_tab(app: &mut VectorzApp, ui: &mut egui::Ui) {
                 tl!("Version {version} — open-source vector illustration in pure Rust."),
                 &[("version", env!("CARGO_PKG_VERSION"))],
             ));
+            // PINTAZ-ABOUT: required credit (Apache-2.0 change notice; ArtCraft brand licence)
+            ui.label(egui::RichText::new("by PINTAZ").strong());
+            ui.label("Based on VectorCraft by Storytold (ArtCraft), Apache-2.0. Changes by PINTAZ TECHNOLOGIES.");
         });
     });
     ui.add_space(12.0);
@@ -64,7 +67,7 @@ fn about_tab(app: &mut VectorzApp, ui: &mut egui::Ui) {
     ui.add_space(12.0);
     ui.label(
         egui::RichText::new(tl!(
-            "Part of ArtCraft. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ."
+            "MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ."
         ))
         .size(11.0),
     );

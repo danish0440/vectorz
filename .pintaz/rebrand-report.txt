@@ -1,43 +1,7 @@
 rebrand vectorcraft -> VectorZ
-about credit inserted in: NOT FOUND
+about credit inserted in: ['crates\\ui-egui\\src\\dialogs\\about.rs (fallback, after line 59)']
 launcher patches: []
-lines still naming ArtCraft/getartcraft/discord (non-doc): 39
+lines still naming ArtCraft/getartcraft/discord (non-doc): 3
 crates/engine/src/cmd/help.rs:1: //! Help → community and project links (the ArtCraft Discord, website, this app's page and its
-crates/engine/src/cmd/help.rs:8: /// The app's id on getartcraft.com and GitHub.
-crates/engine/src/cmd/help.rs:25: cmd!(query "help.discord", "Join Our Discord", ["Help"], None, "{} → {url} the ArtCraft community Discord", always, |_, _| url(DISCORD_URL.into())),
-crates/engine/src/cmd/help.rs:27: cmd!(query "help.appPage", "VectorZ on getartcraft.com", ["Help"], None, "{} → {url} this app's page", always, |_, _| url(app_page_url())),
-crates/ui-egui/src/community.rs:36: let resp = resp.on_hover_text(tl!("Get help on GitHub (discord.gg/artcraft)"));
-crates/ui-egui/src/community.rs:61: link(app, ui, "globe", tl!("ArtCraft website"), "help.website", &s("website"));
-crates/ui-egui/src/community.rs:62: link(app, ui, "external-link", tl!("VectorZ on getartcraft.com"), "help.appPage", &s("appPage"));
-crates/ui-egui/src/menus.rs:2704: c("VectorZ on getartcraft.com", "help.appPage"),
-crates/ui-egui/src/dialogs/about.rs:67: "Part of ArtCraft. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ."
-crates/ui-egui/src/i18n/cs.tsv:623: VectorZ on getartcraft.com	VectorZ na getartcraft.com
-crates/ui-egui/src/i18n/cs.tsv:3478: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/de.tsv:1361: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/de.tsv:3103: VectorZ on getartcraft.com	VectorZ auf getartcraft.com
-crates/ui-egui/src/i18n/es.tsv:1379: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/es.tsv:3203: VectorZ on getartcraft.com	VectorZ en getartcraft.com
-crates/ui-egui/src/i18n/fr.tsv:1378: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/fr.tsv:3200: VectorZ on getartcraft.com	VectorZ sur getartcraft.com
-crates/ui-egui/src/i18n/hu.tsv:1758: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/hu.tsv:3842: VectorZ on getartcraft.com	A VectorZ a getartcraft.com oldalon
-crates/ui-egui/src/i18n/it.tsv:1379: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/it.tsv:3203: VectorZ on getartcraft.com	VectorZ su getartcraft.com
-crates/ui-egui/src/i18n/ja.tsv:649: VectorZ on getartcraft.com	getartcraft.com の VectorZ
-crates/ui-egui/src/i18n/ja.tsv:1594: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/ko.tsv:647: VectorZ on getartcraft.com	getartcraft.com의 VectorZ
-crates/ui-egui/src/i18n/ko.tsv:1589: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/pl.tsv:608: VectorZ on getartcraft.com	VectorZ w getartcraft.com
-crates/ui-egui/src/i18n/pl.tsv:3361: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/pt-br.tsv:1189: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/pt-br.tsv:2621: VectorZ on getartcraft.com	VectorZ em getartcraft.com
-crates/ui-egui/src/i18n/ru.tsv:1377: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/ru.tsv:3199: VectorZ on getartcraft.com	VectorZ на getartcraft.com
-crates/ui-egui/src/i18n/uk.tsv:1373: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/uk.tsv:3196: VectorZ on getartcraft.com	VectorZ на getartcraft.com
-crates/ui-egui/src/i18n/vi.tsv:1586: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/vi.tsv:3509: VectorZ on getartcraft.com	VectorZ trên getartcraft.com
-crates/ui-egui/src/i18n/zh-hans.tsv:1323: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/zh-hans.tsv:3096: VectorZ on getartcraft.com	getartcraft.com 上的 VectorZ
-crates/ui-egui/src/i18n/zh-hant.tsv:1354: Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
-crates/ui-egui/src/i18n/zh-hant.tsv:3189: VectorZ on getartcraft.com	getartcraft.com 上的 VectorZ
+crates/ui-egui/src/dialogs/about.rs:60: // PINTAZ-ABOUT: required credit (Apache-2.0 change notice; ArtCraft brand licence)
+crates/ui-egui/src/dialogs/about.rs:62: ui.label("Based on VectorCraft by Storytold (ArtCraft), Apache-2.0. Changes by PINTAZ TECHNOLOGIES.");

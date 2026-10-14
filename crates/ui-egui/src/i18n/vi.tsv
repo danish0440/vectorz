@@ -264,7 +264,7 @@
 	Artboards	Các bảng vẽ
 	Artboards: {n}	Bảng vẽ: {n}
 	Upstream project	Upstream project
-	Upstream website	Trang web Upstream
+	Upstream project	Upstream project
 	Artistic	Nghệ thuật
 	Artwork Colors	Màu sắc tác phẩm
 	As Multiple Assets	Thành nhiều asset
@@ -1581,9 +1581,9 @@
 	Its graphics, colors and text styles are deleted from this machine.	Đồ họa, màu sắc và kiểu văn bản của nó sẽ bị xóa khỏi máy này.
 	Japanese	Tiếng Nhật
 	Join	Nối
-	Join Our Discord	Tham gia Discord
-	Join our Discord	Tham gia Discord của chúng tôi
-	Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
+	Get help on GitHub	Get help on GitHub
+	Get help on GitHub	Get help on GitHub
+	Join the community on GitHub	Join the community on GitHub
 	Join the lines of each paragraph	Nối các dòng trong mỗi đoạn văn
 	Join Tool	Công cụ Nối
 	Joins	Kiểu nối
@@ -2219,7 +2219,7 @@
 	Paragraph Style Options	Tùy chọn kiểu đoạn văn
 	Paragraph Styles	Kiểu đoạn văn
 	Paragraph Symbol	Ký hiệu đoạn văn
-	Part of Upstream. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	Một phần của Upstream. MIT OR Apache-2.0. Phông chữ: Source Sans 3, Inter, JetBrains Mono (OFL). Biểu tượng: Lucide (ISC) + VectorZ.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.
 	Password	Mật khẩu
 	Paste	Dán
 	Paste Design	Dán thiết kế
@@ -3506,7 +3506,7 @@
 	VectorZ didn't quit normally last time. These documents had unsaved changes:	VectorZ không thoát bình thường lần trước. Các tài liệu này có thay đổi chưa lưu:
 	VectorZ documents: one locked object, updated when the file changes.	Tài liệu VectorZ: một đối tượng bị khóa, cập nhật khi tệp thay đổi.
 	VectorZ Help…	Trợ giúp VectorZ…
-	VectorZ on getartcraft.com	VectorZ trên getartcraft.com
+	VectorZ on GitHub	VectorZ on GitHub
 	VectorZ on GitHub	VectorZ trên GitHub
 	Vectors	Vector
 	Version	Phiên bản

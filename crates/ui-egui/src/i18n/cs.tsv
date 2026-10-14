@@ -26,7 +26,7 @@
 	About VectorZ	O aplikaci VectorZ
 	Align to Path	Zarovnat k cestě
 	Cut Path at Selected Anchor Points	Rozdělit cestu ve vybraných kotevních bodech
-	Join Our Discord	Připojit se k našemu Discordu
+	Get help on GitHub	Get help on GitHub
 	Language	Jazyk
 	UI Brightness	Jas rozhraní
 	Dark	Tmavý
@@ -620,7 +620,7 @@
 	Symbol Libraries	Knihovny symbolů
 	Help	Nápověda
 	Upstream project	Upstream project
-	VectorZ on getartcraft.com	VectorZ na getartcraft.com
+	VectorZ on GitHub	VectorZ on GitHub
 	VectorZ on GitHub	VectorZ na GitHubu
 	Search Commands…	Hledat příkazy…
 	VectorZ Help…	Nápověda VectorZ…
@@ -1792,8 +1792,8 @@ lighting	Light	Světlo
 
 # Dialogs
 	Graphics: {adapter}	Grafika: {adapter}
-	Part of Upstream. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	Součást Upstream. MIT OR Apache-2.0. Písma: Source Sans 3, Inter, JetBrains Mono (OFL). Ikony: Lucide (ISC) + VectorZ.
-	Part of Upstream. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Icons: Lucide (ISC) + VectorZ.	Součást Upstream. MIT OR Apache-2.0. Písma: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Ikony: Lucide (ISC) + VectorZ.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorZ.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Icons: Lucide (ISC) + VectorZ.	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Icons: Lucide (ISC) + VectorZ.
 	Version {version} — open-source vector illustration in pure Rust.	Verze {version} — open-source vektorová ilustrace v čistém Rustu.
 	Align to Page	Zarovnat ke stránce
 	Smooth Color	Plynulá barva
@@ -3472,10 +3472,10 @@ effect	Regular	Pravidelný
 	Recent Files	Nedávné soubory
 	Vector illustration — fast, open, scriptable.	Vektorová ilustrace — rychlá, otevřená, skriptovatelná.
 	Welcome to VectorZ	Vítejte ve VectorZu
-	Upstream website	Web Upstream
+	Upstream project	Upstream project
 	Discord	Discord
-	Join our Discord	Připojit se k našemu Discordu
-	Get help on GitHub (discord.gg/artcraft)	Get help on GitHub (discord.gg/artcraft)
+	Get help on GitHub	Get help on GitHub
+	Join the community on GitHub	Join the community on GitHub
 	Source code on GitHub	Zdrojový kód na GitHubu
 	All Tools	Všechny nástroje
 	Draw	Kresba
