@@ -74,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create Text",
             [],
             None,
-            "{x, y, text, vertical?: bool = false, size?: pt, font?: family, style?, color?, area?: {width, height, fit?: none|autoHeight|shrinkText, fitMinPercent?}, placeholder?: bool (fill it with placeholder text instead, as the Type tools do with prefs placeholderText), justify?: \"auto\" (default: the start of each paragraph's direction)|\"left\"|\"center\"|\"right\"|\"justifyAll\" (point type: aligned on x, so \"center\" centres each line on the point and \"right\" ends it there; text.setStyle changes it later), leadingModel?: \"romanBaseline\"|\"emBoxTop\", charAlign?: \"romanBaseline\"|\"emBoxTop\"|\"emBoxCenter\"|\"emBoxBottom\"|\"icfTop\"|\"icfBottom\" (default: emBoxTop and emBoxCenter while the interface is in Japanese, else romanBaseline)} → {id, overflow?: [id] (area type whose text doesn't fit its frame: the lines past it aren't drawn; left out when it fits)}; new area type gets Auto Size (fit autoHeight) when the autoSizeAreaType preference is on",
+            "{x, y, text, vertical?: bool = false, size?: pt, font?: family, style?, color?, keepModel?: bool (as paint.setFill), area?: {width, height, fit?: none|autoHeight|shrinkText, fitMinPercent?}, placeholder?: bool (fill it with placeholder text instead, as the Type tools do with prefs placeholderText), justify?: \"auto\" (default: the start of each paragraph's direction)|\"left\"|\"center\"|\"right\"|\"justifyAll\" (point type: aligned on x, so \"center\" centres each line on the point and \"right\" ends it there; text.setStyle changes it later), leadingModel?: \"romanBaseline\"|\"emBoxTop\", charAlign?: \"romanBaseline\"|\"emBoxTop\"|\"emBoxCenter\"|\"emBoxBottom\"|\"icfTop\"|\"icfBottom\" (default: emBoxTop and emBoxCenter while the interface is in Japanese, else romanBaseline)} → {id, bounds: {x, y, width, height} (the new type's box as document.inspect reports it, after justify), overflow?: [id] (area type whose text doesn't fit its frame: the lines past it aren't drawn; left out when it fits)}; new area type gets Auto Size (fit autoHeight) when the autoSizeAreaType preference is on",
             has_doc,
             text_create
         ),
@@ -95,6 +95,12 @@ pub(crate) fn add_node(s: &mut Session, label: &str, kind: NodeKind, appearance:
 
 /// Insert a new object looking like `look` (drawing modes apply); select it.
 pub(crate) fn add_look(s: &mut Session, label: &str, kind: NodeKind, look: NewArt, name: Option<String>) -> Result<Value> {
+    insert_look(s, label, kind, look, name, true)
+}
+
+/// [`add_look`] that selects the new object only when `select` is set; otherwise the selection
+/// stays as it was.
+pub(crate) fn insert_look(s: &mut Session, label: &str, kind: NodeKind, look: NewArt, name: Option<String>, select: bool) -> Result<Value> {
     let parent = s.doc()?.target_parent()?;
     let mode = s.draw_mode;
     let inside = s.draw_inside;
@@ -137,7 +143,9 @@ pub(crate) fn add_look(s: &mut Session, label: &str, kind: NodeKind, look: NewAr
                 d.insert(parent, usize::MAX, n)?;
             }
         }
-        sel.set([id]);
+        if select {
+            sel.set([id]);
+        }
         Ok(id)
     })?;
     Ok(json!({ "id": id.0 }))
@@ -504,6 +512,7 @@ fn text_create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let made = add_node(s, "Type", NodeKind::Text(Box::new(t)), Appearance::default(), None)?;
     let id = made.get("id").and_then(Value::as_u64).map(NodeId);
+    let made = super::typecmd::with_bounds(s, id, made);
     Ok(super::typecmd::with_overflow(s, id.as_slice(), made))
 }
 
@@ -564,8 +573,9 @@ pub(crate) fn new_area_fit(s: &Session, p: &Value, c: &str) -> Result<vectorz_do
     Ok(super::typecmd::fit_param(p, default, c)?.unwrap_or(default))
 }
 
-/// The character style new type gets: `size`, `font`, `style` and `color` from `p`, else the
-/// defaults, filled with the current fill unless that is None or white (black then).
+/// The character style new type gets: `size`, `font`, `style` and `color` from `p` (an RGB
+/// `color` in a CMYK document as [`super::paint::new_color`] stores it), else the defaults,
+/// filled with the current fill unless that is None or white (black then).
 pub(crate) fn new_type_style(s: &Session, p: &Value) -> CharStyle {
     let mut style = CharStyle::default();
     if let Some(sz) = p.get("size").and_then(Value::as_f64) {
@@ -578,7 +588,7 @@ pub(crate) fn new_type_style(s: &Session, p: &Value) -> CharStyle {
         style.font_style = f.to_string();
     }
     style.fill = match p.get("color").and_then(color_value) {
-        Some(c) => vectorz_color::Paint::solid(c),
+        Some(c) => vectorz_color::Paint::solid(super::paint::new_color(s, p, c)),
         None if !s.paint.fill.is_none() && s.paint.fill != vectorz_color::Paint::solid(vectorz_color::Color::WHITE) => s.paint.fill.clone(),
         None => vectorz_color::Paint::solid(vectorz_color::Color::BLACK),
     };

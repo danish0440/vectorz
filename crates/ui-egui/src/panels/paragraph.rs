@@ -1,10 +1,11 @@
 //! Paragraph panel: seven alignment buttons, Paragraph Direction (with the Indic options), indents,
 //! space before/after, Hyphenate, Mojikumi Set and Kinsoku Set (with the East Asian options); the panel menu
-//! picks the Single-line or Every-line Composer.
+//! turns Roman Hanging Punctuation on and off, opens Justification… and Hyphenation… and picks the
+//! Single-line or Every-line Composer.
 
 use egui::{Ui, vec2};
 use serde_json::{Value, json};
-use vectorz_doc::{Composer, Justify, NodeKind, ParaDirection, ParaStyle};
+use vectorz_doc::{Composer, HyphenationOptions, Justify, NodeKind, ParaDirection, ParaStyle};
 
 use super::character::text_style;
 use super::{pstate, set_pstate};
@@ -46,14 +47,19 @@ pub(crate) fn align(app: &mut VectorzApp, justify: &str) -> Result<Value, String
     Ok(Value::Null)
 }
 
-fn para_cmd(app: &mut VectorzApp, cmd: &str, mut p: Value) {
+fn para_cmd(app: &mut VectorzApp, cmd: &str, p: Value) {
+    run_on_paragraphs(app, cmd, p).ok();
+}
+
+/// Run `cmd` on the paragraphs the Paragraph panel acts on ([`format`]) and return its result.
+pub(crate) fn run_on_paragraphs(app: &mut VectorzApp, cmd: &str, mut p: Value) -> Result<Value, String> {
     if let Some((id, a, b)) = super::character::text_editing(app) {
         super::character::end_typing(app);
         p["ids"] = json!([id.0]);
         p["start"] = json!(a);
         p["end"] = json!(b);
     }
-    app.run(cmd, p).ok();
+    app.run(cmd, p)
 }
 
 /// Does the paragraph being edited (at the caret), else the selected text's first paragraph, run
@@ -277,8 +283,20 @@ pub fn menu(app: &mut VectorzApp, ui: &mut Ui) {
         set_pstate(ui.ctx(), "pa-hide-options", !hidden);
     }
     ui.separator();
-    for l in [tl!("Roman Hanging Punctuation"), tl!("Justification…"), tl!("Hyphenation…")] {
-        menu_item(ui, l, false, false);
+    // Quotation marks, hyphens, full stops and commas at a line's ends hang outside the margin.
+    let roman = style.as_ref().is_some_and(|(_, p)| p.roman_hanging);
+    if menu_item(ui, tl!("Roman Hanging Punctuation"), has, roman) {
+        format(app, json!({"romanHangingPunctuation": !roman}));
+    }
+    if menu_item(ui, tl!("Justification…"), has, false)
+        && let Err(e) = app.run("ui.justification", json!({}))
+    {
+        app.status(e);
+    }
+    if menu_item(ui, tl!("Hyphenation…"), has, false)
+        && let Err(e) = app.run("ui.hyphenation", json!({}))
+    {
+        app.status(e);
     }
     // How leading is measured (Japanese layout measures it from em box top to em box top), with
     // the East Asian options.
@@ -320,12 +338,30 @@ pub fn menu(app: &mut VectorzApp, ui: &mut Ui) {
     }
     ui.separator();
     if menu_item(ui, tl!("Reset Panel"), has, false) {
-        para_cmd(app, "text.setStyle", json!({"justify": "auto"}));
-        format(
-            app,
-            json!({"leftIndent": 0, "rightIndent": 0, "firstLineIndent": 0, "spaceBefore": 0, "spaceAfter": 0, "hyphenate": false, "direction": "auto", "leadingModel": "romanBaseline", "burasagari": "standard", "kinsoku": "hard", "composer": "everyLine"}),
-        );
+        reset_panel(app);
     }
+}
+
+/// Reset Panel: the paragraphs the panel acts on ([`format`]) take Auto alignment, no indents or
+/// paragraph spacing, Hyphenate off with the default Hyphenation and Justification options, Auto
+/// direction, Bottom-to-Bottom Leading, Regular burasagari, the Hard kinsoku set, the Every-line
+/// Composer and Roman Hanging Punctuation off.
+fn reset_panel(app: &mut VectorzApp) {
+    let h = HyphenationOptions::default();
+    let j = vectorz_doc::JustificationOptions::default();
+    para_cmd(app, "text.setStyle", json!({"justify": "auto"}));
+    format(
+        app,
+        json!({
+            "leftIndent": 0, "rightIndent": 0, "firstLineIndent": 0, "spaceBefore": 0, "spaceAfter": 0, "hyphenate": false,
+            "wordsLongerThan": h.words_longer_than, "afterFirst": h.after_first, "beforeLast": h.before_last,
+            "hyphenLimit": h.hyphen_limit, "hyphenationZone": h.zone, "hyphenateCapitalized": h.capitalized,
+            "wordSpacing": j.word_spacing, "letterSpacing": j.letter_spacing, "glyphScaling": j.glyph_scaling,
+            "autoLeading": j.auto_leading, "singleWordJustification": "fullJustify",
+            "direction": "auto", "leadingModel": "romanBaseline", "burasagari": "standard", "kinsoku": "hard", "composer": "everyLine",
+            "romanHangingPunctuation": false
+        }),
+    );
 }
 
 #[cfg(test)]
@@ -549,5 +585,42 @@ mod tests {
         let without = tips(&mut app);
         app.session.prefs.show_indic_options = true;
         assert!(tips(&mut app) > without, "two more buttons");
+    }
+
+    /// Reset Panel turns Hyphenate and Roman Hanging Punctuation off and sets the Hyphenation and
+    /// Justification options back to their defaults in every paragraph it acts on, so the paragraphs
+    /// save neither.
+    #[test]
+    fn reset_panel_resets_the_hyphenation_options() {
+        let mut app = VectorzApp::new(Session::new(), Default::default());
+        app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+        let id = app.run("text.create", json!({"x": 20, "y": 50, "text": "First\nSecond"})).unwrap()["id"].clone();
+        app.run(
+            "text.setFormat",
+            json!({
+                "hyphenate": true, "wordsLongerThan": 8, "afterFirst": 2, "beforeLast": 4, "hyphenLimit": 2, "hyphenationZone": 18, "hyphenateCapitalized": false,
+                "wordSpacing": [60, 90, 200], "letterSpacing": [-5, 0, 5], "glyphScaling": [95, 100, 105], "autoLeading": 150, "singleWordJustification": "alignLeft", "romanHangingPunctuation": true
+            }),
+        )
+        .unwrap();
+        let paras = |app: &VectorzApp| {
+            let node = app.session.active().unwrap().doc.node(vectorz_doc::NodeId(id.as_u64().unwrap())).unwrap();
+            let NodeKind::Text(text) = &node.kind else { panic!("text") };
+            [text.para_at(0).clone(), text.para_at(1).clone()]
+        };
+        for para in paras(&app) {
+            assert!(para.hyphenate);
+            assert_ne!(para.hyphenation, HyphenationOptions::default());
+            assert!(para.roman_hanging);
+            assert_ne!(para.justification, vectorz_doc::JustificationOptions::default());
+        }
+        reset_panel(&mut app);
+        for para in paras(&app) {
+            assert!(!para.hyphenate);
+            assert_eq!(para.hyphenation, HyphenationOptions::default());
+            assert_eq!(serde_json::to_value(&para).unwrap().get("hyphenation"), None, "saves no hyphenation options");
+            assert!(!para.roman_hanging, "Roman Hanging Punctuation off");
+            assert_eq!(serde_json::to_value(&para).unwrap().get("justification"), None, "saves no justification options");
+        }
     }
 }

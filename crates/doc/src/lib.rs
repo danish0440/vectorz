@@ -8,20 +8,30 @@
 pub mod appearance;
 pub mod assets;
 pub mod blend;
+pub mod cancel;
 pub mod clipnest;
 pub mod cmyk;
 pub mod corners;
 pub mod depth;
+pub mod dimension;
 pub mod graph;
 pub mod hit;
 mod id_index;
 pub mod inks;
 mod inline;
+pub mod intertwine;
 pub mod shared;
+mod symbol_export_type;
+mod symbol_nine_slice;
+mod symbol_registration;
 pub use inline::{SYMBOL_HALF, SYMBOL_SIZES};
 pub use shared::Shared;
+pub use symbol_export_type::{SYMBOL_EXPORT_TYPE, SymbolExportType};
+pub use symbol_nine_slice::{SYMBOL_NINE_SLICE, SymbolNineSlice};
+pub use symbol_registration::{SYMBOL_REGISTRATION, SymbolRegistration};
 pub mod links;
 pub mod live;
+pub mod live_paint;
 pub mod marks;
 mod mem;
 pub mod metadata;
@@ -83,17 +93,18 @@ pub use assets::ExportAsset;
 pub use corners::LiveCorners;
 pub use depth::MAX_DEPTH;
 pub use graph::{
-    GraphDesign, GraphKind, GraphSpec, LabelStyles, MAX_GRAPH_CATEGORIES, MAX_GRAPH_SERIES, PiePosition, PieSort, SeriesPaint, TickLength,
-    ValueAxisSide,
+    ColumnDesign, ColumnType, Fractions, GraphDesign, GraphKind, GraphSpec, LabelStyles, MAX_GRAPH_CATEGORIES, MAX_GRAPH_SERIES, PiePosition,
+    PieSort, SeriesPaint, TickLength, ValueAxisSide,
 };
 pub use hit::{Hit, HitKind};
 pub use links::{LinkInfo, PlacementOptions};
 pub use live::{BlendOrientation, BlendSpacing, BlendSpec, EnvelopeKind, GradientMesh, MeshPoint};
+pub use live_paint::{GapOptions, GapSize};
 pub use metadata::{CopyrightStatus, DocMetadata};
 pub use node::Knockout;
 pub use node::Scaling;
 pub use node::{Extras, ExtrasMut, ImageObject, LAYER_COLORS, LayerColor, LiveShape, Node, NodeExtras, NodeId, NodeKind, OpacityMask};
-pub use node::{ImageMap, ObjectAttributes};
+pub use node::{ImageMap, MAX_SVG_SCRIPTS, ObjectAttributes, SVG_EVENTS};
 pub use orient::OrientedBox;
 pub use pattern::{Overlap, PatternDef, PatternEdit, RepeatKind, RepeatSpec, TileType};
 pub use perspective::PerspectiveAttachment;
@@ -106,9 +117,9 @@ pub use setup::{Background, DocSetup, ExportText, GridSize, Quotes};
 pub use slices::{CellAlign, CellVAlign, Slice, SliceArea, SliceKind, SliceOptions, SliceSource};
 pub use style_libs::StyleLibrary;
 pub use text::{
-    AreaFit, AreaOptions, Burasagari, CharAlign, CharPosition, CharStyle, Composer, Digits, FirstBaseline, InlineArt, Justify, Kinsoku, LeadingModel,
-    Mojikumi, ParaDirection, ParaStyle, PathAlign, PathEffect, ScriptMetrics, TabAlign, TabStop, TextKind, TextObject, TextRun, TextStyleDef,
-    TextWrap, VerticalAlign, WrapShape,
+    AreaFit, AreaOptions, Burasagari, CharAlign, CharPosition, CharStyle, Composer, Digits, FirstBaseline, HyphenationOptions, InlineArt,
+    JustificationOptions, Justify, Kinsoku, LeadingModel, Mojikumi, ParaDirection, ParaStyle, PathAlign, PathEffect, ScriptMetrics,
+    SingleWordJustify, TabAlign, TabStop, TextKind, TextObject, TextRun, TextStyleDef, TextWrap, VerticalAlign, WrapShape,
 };
 pub use trace::TraceView;
 pub use variables::{DataSet, DataValue, Variable, VariableKind, Variables};
@@ -118,6 +129,9 @@ pub use vectorz_geom as geom;
 use serde::{Deserialize, Serialize};
 use vectorz_color::{Swatch, SwatchGroup};
 use vectorz_geom::{Affine, Point, Rect, Vec2};
+
+/// Coordinates beyond this many points exceed the supported document range.
+pub const MAX_COORD: f64 = 4.0e6;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DocError {
@@ -232,7 +246,10 @@ impl Unit {
     /// Parse `12`, `12pt`, `1in`, `3 mm`, `2p6` (picas+points), simple `+ - * /` arithmetic.
     ///
     /// A unit after a `*` or `/` operand measures the whole expression (`1080/2 px` is 540 px), so
-    /// math typed before a field's unit suffix works.
+    /// math typed before a field's unit suffix works. After `*` or `/`, a percentage scales the term
+    /// before it (`3cm*50%` is 1.5 cm, `3cm/50%` is 6 cm). After `+` or `-`, it adds or takes away
+    /// that share of everything before it (`50pt+25%` is 62.5 pt, `100pt+20pt-50%` is 60 pt). A
+    /// percentage on its own (`50%`) reads as nothing.
     pub fn parse(self, s: &str) -> Option<f64> {
         parse_measure(s, self).filter(|v| v.is_finite())
     }
@@ -257,7 +274,12 @@ impl Unit {
     pub fn named(name: &str) -> Option<Unit> {
         let letters = |s: &'static str| s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase());
         let given = || name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase());
-        Unit::ALL.into_iter().find(|u| letters(u.label()).eq(given()) || u.suffix().chars().eq(given()))
+        // Feet and Feet & Inches share the suffix `ft`: it names the plain unit, so Feet & Inches
+        // is left to its label and key.
+        Unit::ALL
+            .into_iter()
+            .find(|u| letters(u.label()).eq(given()))
+            .or_else(|| Unit::ALL.into_iter().filter(|u| *u != Unit::FeetInches).find(|u| u.suffix().chars().eq(given())))
     }
     /// A point value as the canvas measurement labels show it: two decimals and the suffix
     /// (`12.50 mm`).
@@ -269,20 +291,41 @@ impl Unit {
 fn parse_measure(s: &str, default: Unit) -> Option<f64> {
     let s = s.trim();
     // Simple arithmetic on the right (Illustrator fields accept "10+5", "100/2", "3in*2").
-    for op in ['+', '-', '*', '/'] {
+    // `+` and `-` share one precedence level, as do `*` and `/`, so each level splits at the last
+    // of its operators (left to right).
+    for ops in [&['+', '-'][..], &['*', '/'][..]] {
         // Past the first character, so a leading sign isn't an operator.
         let skip = s.chars().next().map_or(0, char::len_utf8);
-        if let Some(i) = s[skip..].rfind(op).map(|i| i + skip) {
+        // A `+` or `-` right after another operator is the sign of its operand (`10*-2`, `5--3`).
+        let is_sign = |i: usize| {
+            s.get(i..).and_then(|r| r.chars().next()).is_some_and(|c| matches!(c, '+' | '-'))
+                && s.get(..i).and_then(|l| l.trim_end().chars().last()).is_some_and(|c| "+-*/".contains(c))
+        };
+        let found = s.char_indices().rev().find(|&(i, c)| i >= skip && ops.contains(&c) && !is_sign(i));
+        if let Some(i) = found.map(|(i, _)| i) {
             let (l, r) = (&s[..i], &s[i + 1..]);
             if l.trim().is_empty() {
                 continue;
             }
+            let Some(op) = s[i..].chars().next() else { continue };
             return match op {
-                '+' => Some(parse_measure(l, default)? + parse_measure(r, default)?),
-                '-' => Some(parse_measure(l, default)? - parse_measure(r, default)?),
+                '+' | '-' => {
+                    let a = parse_measure(l, default)?;
+                    // A percentage added or taken away is a share of everything before it:
+                    // `50pt+25%` is 62.5 pt, `100pt+20%-10pt` is 110 pt.
+                    let b = match percent(r) {
+                        Some(k) => a * k,
+                        None => parse_measure(r, default)?,
+                    };
+                    Some(if op == '+' { a + b } else { a - b })
+                }
                 _ => {
-                    // A factor or divisor is a plain number; a unit after it is the expression's.
-                    let (k, unit) = number_unit(r)?;
+                    // A factor or divisor is a plain number or a percentage (`3cm*50%` is 1.5 cm);
+                    // a unit after it is the expression's.
+                    let (k, unit) = match percent(r) {
+                        Some(k) => (k, None),
+                        None => number_unit(r)?,
+                    };
                     let a = parse_measure(l, unit.unwrap_or(default))?;
                     if op == '*' {
                         Some(a * k)
@@ -302,7 +345,10 @@ fn parse_measure(s: &str, default: Unit) -> Option<f64> {
         && !s.ends_with("pt")
         && !s.ends_with("px")
     {
-        return Some(p.trim().parse::<f64>().ok()? * 12.0 + pt.trim().parse::<f64>().unwrap_or(0.0));
+        // The sign belongs to the whole value: `-2p6` is -(2 picas + 6 points).
+        let sign = if p.trim_start().starts_with('-') { -1.0 } else { 1.0 };
+        let picas = p.trim().parse::<f64>().ok()?.abs();
+        return Some(sign * (picas * 12.0 + pt.trim().parse::<f64>().unwrap_or(0.0)));
     }
     let (v, unit) = number_unit(s)?;
     Some(unit.unwrap_or(default).to_pt(v))
@@ -327,6 +373,14 @@ fn number_unit(s: &str) -> Option<(f64, Option<Unit>)> {
         _ => return None,
     };
     Some((v, unit))
+}
+
+/// A number followed by `%` (`50%`, `12.5 %`) → its fraction (`0.5`, `0.125`).
+fn percent(s: &str) -> Option<f64> {
+    match number_unit(s.trim().strip_suffix('%')?)? {
+        (p, None) => Some(p / 100.0),
+        _ => None,
+    }
 }
 
 /// A unitless field value (percent, degrees, counts) with the same `+ - * /` arithmetic as
@@ -547,6 +601,23 @@ pub struct ImageBlob {
     pub proxy: Option<Arc<Vec<u8>>>,
 }
 
+/// What the rulers measure from (View › Rulers): the active artboard's origin, the default of a
+/// new document, or one origin for the whole document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RulerMode {
+    #[default]
+    Artboard,
+    Global,
+}
+
+impl RulerMode {
+    /// The mode of a document saved before the choice existed: global, as its rulers measured.
+    pub fn legacy() -> Self {
+        Self::Global
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub version: u32,
@@ -560,6 +631,15 @@ pub struct Document {
     /// The rulers' zero point in document coordinates. Moving it changes measurements, never art.
     #[serde(default, skip_serializing_if = "skip::is_default")]
     pub ruler_origin: Point,
+    /// View › Rulers › Change to Global / Artboard Rulers: whether the rulers and position fields
+    /// measure from [`Self::ruler_origin`] (global) or from the active artboard's own origin.
+    /// Documents saved before the choice existed measured globally and open that way.
+    #[serde(default = "RulerMode::legacy")]
+    pub rulers: RulerMode,
+    /// Artboard rulers' zero point of each artboard (by [`Artboard::id`]), as an offset from its
+    /// top-left corner; an artboard not listed measures from that corner.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub artboard_ruler_origins: BTreeMap<u32, Vec2>,
     #[serde(default)]
     pub color_mode: ColorMode,
     pub artboards: Vec<Artboard>,
@@ -650,6 +730,10 @@ pub struct Document {
     /// save time only, so changing the view never marks the document modified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_view: Option<SavedView>,
+    /// View → Show Transparency Grid when the document was saved. Written at save time only,
+    /// like [`Document::last_view`]; older files open with the grid hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transparency_grid: bool,
     /// The layers, sublayers and groups open in the Layers panel when the document was saved; they
     /// reopen that way. `None`: the default, only the top-level layers open. Written at save time
     /// only, like [`Document::last_view`].
@@ -682,10 +766,18 @@ pub struct Document {
     /// export settings are Export for Screens' ([`Document::export_settings`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assets: Vec<ExportAsset>,
+    /// Window › SVG Interactivity › Link JavaScript Files: the JavaScript files (paths or URLs, as
+    /// given) SVG export links with `<script>` elements, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub svg_scripts: Vec<String>,
     /// Puppet Warp pins on the selected artwork while the tool edits it ([`PuppetPins`]): editing
     /// state, never saved.
     #[serde(skip)]
     pub puppet: Option<Arc<PuppetPins>>,
+    /// Some object is a dimension (the Dimension tool): edits refresh dimensions only while this
+    /// is set, so documents without any pay nothing for them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dimensions: bool,
     /// Where each node is in the tree, for lookups by id ([`id_index`]): a cache, never saved.
     #[serde(skip)]
     index: id_index::IdIndex,
@@ -699,6 +791,14 @@ fn yes() -> bool {
     true
 }
 
+/// Is point `p` on the artboard at `rect`, its edges included, within a millionth of a point? This
+/// is the rule [`Document::art_on_artboard`] applies to art flush with an edge (#890), where
+/// `Rect::contains` leaves out the right and bottom edges.
+pub fn artboard_holds(rect: Rect, p: Point) -> bool {
+    let r = rect.inflate(1e-6, 1e-6);
+    r.x0 <= p.x && p.x <= r.x1 && r.y0 <= p.y && p.y <= r.y1
+}
+
 /// Listed nodes by parent: the parent's index path (empty for the top-level layers), then the index
 /// of each listed child in it, in order, with the child's place in the list.
 type Places = BTreeMap<Vec<usize>, Vec<(usize, usize)>>;
@@ -706,6 +806,34 @@ type Places = BTreeMap<Vec<usize>, Vec<(usize, usize)>>;
 pub const FORMAT_VERSION: u32 = 1;
 
 impl Document {
+    /// The ruler zero point, or zero on both axes when either stored coordinate is invalid.
+    /// Rulers, coordinate fields and guide snapping use the same supported range.
+    pub fn ruler_origin_or_zero(&self) -> Point {
+        let origin = self.ruler_origin;
+        if origin.is_finite() && origin.x.abs() <= MAX_COORD && origin.y.abs() <= MAX_COORD { origin } else { Point::ZERO }
+    }
+
+    /// Where the rulers measure from with artboard `index` active: [`Self::ruler_origin_or_zero`]
+    /// with global rulers; with artboard rulers that artboard's top-left corner moved by its own
+    /// offset (the first artboard's when `index` is out of range, the global zero point when the
+    /// document has no artboard or the result is out of the supported range).
+    pub fn ruler_origin_for(&self, index: usize) -> Point {
+        if self.rulers == RulerMode::Global {
+            return self.ruler_origin_or_zero();
+        }
+        let Some(ab) = self.artboards.get(index).or_else(|| self.artboards.first()) else { return self.ruler_origin_or_zero() };
+        let corner = Point::new(ab.rect.x0, ab.rect.y0);
+        let offset = self.artboard_ruler_origins.get(&ab.id).copied().unwrap_or(Vec2::ZERO);
+        let origin = corner + offset;
+        if origin.is_finite() && origin.x.abs() <= MAX_COORD && origin.y.abs() <= MAX_COORD {
+            origin
+        } else if corner.is_finite() && corner.x.abs() <= MAX_COORD && corner.y.abs() <= MAX_COORD {
+            corner
+        } else {
+            Point::ZERO
+        }
+    }
+
     /// A new RGB document with one artboard of `size` and one layer ("Layer 1").
     pub fn new(width: f64, height: f64) -> Self {
         Self::new_with_mode(width, height, ColorMode::Rgb)
@@ -720,6 +848,8 @@ impl Document {
             template: false,
             units: Unit::Points,
             ruler_origin: Point::ZERO,
+            rulers: RulerMode::Artboard,
+            artboard_ruler_origins: BTreeMap::new(),
             color_mode: mode,
             artboards: vec![Artboard {
                 id: 1,
@@ -757,6 +887,7 @@ impl Document {
             metadata: DocMetadata::default(),
             raster_effects: RasterEffectsSettings::default(),
             last_view: None,
+            transparency_grid: false,
             layers_open: None,
             color_profiles: ColorProfiles::default(),
             export_settings: Default::default(),
@@ -765,7 +896,9 @@ impl Document {
             slices_clip_to_artboard: true,
             print_setup: None,
             assets: vec![],
+            svg_scripts: vec![],
             puppet: None,
+            dimensions: false,
             index: Default::default(),
         };
         let id = d.alloc_id();
@@ -1236,9 +1369,24 @@ impl Document {
         let symbols = self.symbol_boxes();
         self.layers.iter().fold(None, |acc, l| vectorz_geom::union_opt(acc, l.visual_bounds_with(&symbols)))
     }
-    /// Artboard index containing point `p` (topmost = last).
+    /// Artboard index containing point `p` (topmost = last), its edges included
+    /// ([`Document::artboard_holding`]).
     pub fn artboard_at(&self, p: Point) -> Option<usize> {
-        self.artboards.iter().rposition(|a| a.rect.contains(p))
+        self.artboard_holding(p, true)
+    }
+    /// Index of the artboard that holds point `p`: the first (the last when `topmost`) that holds it
+    /// inside or on its left or top edge, else the first (the last) that holds it by
+    /// [`artboard_holds`]: on its right or bottom edge, or within a millionth of a point outside an
+    /// edge. On an edge two artboards share, the artboard to the right of it or below it holds the
+    /// point, except at the end of the edge that lies on that artboard's bottom or right edge, such
+    /// as the point where both artboards' bottom edges meet; there the first (the last) holds it.
+    pub fn artboard_holding(&self, p: Point, topmost: bool) -> Option<usize> {
+        let pick = |on: &dyn Fn(Rect) -> bool| {
+            let on = |i: &usize| self.artboards.get(*i).is_some_and(|a| on(a.rect));
+            let mut all = 0..self.artboards.len();
+            if topmost { all.rfind(on) } else { all.find(on) }
+        };
+        pick(&|r| r.contains(p)).or_else(|| pick(&|r| artboard_holds(r, p)))
     }
     /// The art that moves with an artboard at `rect`: top-level objects (children of layers and
     /// sublayers) lying entirely inside it, with symbol instances measured by their art. Locked and
@@ -1399,6 +1547,13 @@ impl Document {
     pub fn reid(&mut self, node: &Node) -> Node {
         let mut n = node.clone();
         n.id = self.alloc_id();
+        // A copied annotation must never bind its source ids to unrelated art in a different
+        // document. Keep the measured geometry; new measurements can be linked after pasting.
+        if let Some(e) = n.extras_if_any()
+            && let Some(dimension) = &mut e.dimension
+        {
+            dimension.source = None;
+        }
         if let Some(ch) = n.children_mut() {
             let old: Vec<Arc<Node>> = std::mem::take(ch);
             *ch = old.iter().map(|c| Arc::new(self.reid(c))).collect();
@@ -1492,6 +1647,107 @@ impl Document {
             return base.to_string();
         }
         (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+    }
+
+    /// Symbol Options › Registration for `name` (default: centre).
+    pub fn symbol_registration(&self, name: &str) -> SymbolRegistration {
+        self.unknown
+            .get(SYMBOL_REGISTRATION)
+            .and_then(|m| m.get(name))
+            .and_then(|v| v.as_u64())
+            .and_then(SymbolRegistration::from_u64)
+            .unwrap_or_default()
+    }
+
+    /// Set or clear (when centre) the registration point stored for `name`.
+    pub fn set_symbol_registration(&mut self, name: &str, reg: SymbolRegistration) {
+        let m = self.unknown.entry(SYMBOL_REGISTRATION.to_string()).or_insert_with(|| serde_json::json!({}));
+        let Some(o) = m.as_object_mut() else { return };
+        if reg.is_center() {
+            o.remove(name);
+            if o.is_empty() {
+                self.unknown.remove(SYMBOL_REGISTRATION);
+            }
+        } else {
+            o.insert(name.into(), serde_json::json!(reg.0));
+        }
+    }
+
+    /// Move the stored registration when a symbol is renamed.
+    pub fn rename_symbol_registration(&mut self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        let reg = self.symbol_registration(from);
+        self.set_symbol_registration(from, SymbolRegistration::CENTER);
+        self.set_symbol_registration(to, reg);
+    }
+
+    /// Symbol Options › Export Type for `name` (default: Movie Clip).
+    pub fn symbol_export_type(&self, name: &str) -> SymbolExportType {
+        self.unknown.get(SYMBOL_EXPORT_TYPE).and_then(|m| m.get(name)).and_then(SymbolExportType::from_value).unwrap_or_default()
+    }
+
+    /// Set or clear (when Movie Clip, the default) the export type stored for `name`.
+    pub fn set_symbol_export_type(&mut self, name: &str, kind: SymbolExportType) {
+        if kind.is_default() {
+            self.clear_symbol_export_type(name);
+            return;
+        }
+        let m = self.unknown.entry(SYMBOL_EXPORT_TYPE.to_string()).or_insert_with(|| serde_json::json!({}));
+        let Some(o) = m.as_object_mut() else { return };
+        o.insert(name.into(), serde_json::json!(kind.id()));
+    }
+
+    /// Drop any stored export type for `name` (Movie Clip default).
+    pub fn clear_symbol_export_type(&mut self, name: &str) {
+        let Some(m) = self.unknown.get_mut(SYMBOL_EXPORT_TYPE) else { return };
+        let Some(o) = m.as_object_mut() else { return };
+        o.remove(name);
+        if o.is_empty() {
+            self.unknown.remove(SYMBOL_EXPORT_TYPE);
+        }
+    }
+
+    /// Move the stored export type when a symbol is renamed.
+    pub fn rename_symbol_export_type(&mut self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        let kind = self.symbol_export_type(from);
+        self.clear_symbol_export_type(from);
+        self.set_symbol_export_type(to, kind);
+    }
+
+    /// Symbol Options › 9-slice guides for `name`: `None` when 9-slice scaling is off (default).
+    pub fn symbol_nine_slice(&self, name: &str) -> Option<SymbolNineSlice> {
+        self.unknown.get(SYMBOL_NINE_SLICE).and_then(|m| m.get(name)).and_then(SymbolNineSlice::from_value)
+    }
+
+    /// Turn 9-slice scaling on with `guides`, or off with `None`, for `name`.
+    pub fn set_symbol_nine_slice(&mut self, name: &str, guides: Option<SymbolNineSlice>) {
+        let Some(g) = guides else {
+            let Some(o) = self.unknown.get_mut(SYMBOL_NINE_SLICE).and_then(|m| m.as_object_mut()) else { return };
+            o.remove(name);
+            if o.is_empty() {
+                self.unknown.remove(SYMBOL_NINE_SLICE);
+            }
+            return;
+        };
+        let m = self.unknown.entry(SYMBOL_NINE_SLICE.to_string()).or_insert_with(|| serde_json::json!({}));
+        if let Some(o) = m.as_object_mut() {
+            o.insert(name.into(), g.to_value());
+        }
+    }
+
+    /// Move the stored 9-slice guides when a symbol is renamed.
+    pub fn rename_symbol_nine_slice(&mut self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        let g = self.symbol_nine_slice(from);
+        self.set_symbol_nine_slice(from, None);
+        self.set_symbol_nine_slice(to, g);
     }
 }
 
@@ -1609,6 +1865,44 @@ mod tests {
         d.insert(Some(layer), 0, Node::new(id, NodeKind::SymbolInstance { symbol: "Box".into(), xf: Affine::translate((2.0, 2.0)) })).unwrap();
         // The art, (2, 2) to (12, 12), lies inside; the 20 × 20 square, (-8, -8) to (12, 12), doesn't.
         assert_eq!(d.art_on_artboard(Rect::new(0.0, 0.0, 15.0, 15.0), false), vec![id]);
+    }
+
+    #[test]
+    fn artboard_at_counts_the_right_and_bottom_edges() {
+        // Artboard 0 is (0, 0) to (100, 100), artboard 1 is to its right and artboard 2 below it.
+        let mut d = Document::new(100.0, 100.0);
+        for rect in [Rect::new(100.0, 0.0, 200.0, 100.0), Rect::new(0.0, 100.0, 100.0, 200.0)] {
+            let mut a = d.artboards[0].clone();
+            a.rect = rect;
+            d.artboards.push(a);
+        }
+        let held = |d: &Document, x: f64, y: f64| (d.artboard_at(Point::new(x, y)), d.artboard_holding(Point::new(x, y), false));
+        // Each artboard's own right and bottom edges, edges with roundoff, and points beyond them.
+        assert_eq!(held(&d, 200.0, 50.0), (Some(1), Some(1)), "right edge");
+        assert_eq!(held(&d, 150.0, 100.0), (Some(1), Some(1)), "bottom edge");
+        assert_eq!(held(&d, 200.0, 100.0), (Some(1), Some(1)), "bottom right corner");
+        assert_eq!(held(&d, 100.0, 150.0), (Some(2), Some(2)), "right edge");
+        assert_eq!(held(&d, 50.0, 200.0 + 1e-9), (Some(2), Some(2)), "roundoff past the bottom edge");
+        assert_eq!(held(&d, -1e-9, 50.0), (Some(0), Some(0)), "roundoff past the left edge");
+        assert_eq!(held(&d, 200.001, 50.0), (None, None));
+        assert_eq!(held(&d, 50.0, 200.001), (None, None));
+        // On an edge two artboards share, the artboard to the right of it or below it holds the
+        // point, in either list order, except at the end of the edge that lies on that artboard's
+        // bottom or right edge.
+        assert_eq!(held(&d, 100.0, 50.0), (Some(1), Some(1)));
+        assert_eq!(held(&d, 50.0, 100.0), (Some(2), Some(2)));
+        // The bottom edges of artboards 0 and 1 meet at (100, 100), which is also artboard 2's top
+        // right corner: the first holds the point, or the last when `topmost`.
+        assert_eq!(held(&d, 100.0, 100.0), (Some(2), Some(0)), "shared corner");
+        d.artboards.swap(0, 1);
+        assert_eq!(held(&d, 100.0, 50.0), (Some(0), Some(0)));
+        // Where two artboards overlap, the topmost holds the point, or the first one when not
+        // `topmost`.
+        let mut inner = d.artboards[1].clone();
+        inner.rect = Rect::new(10.0, 10.0, 90.0, 90.0);
+        d.artboards.push(inner);
+        assert_eq!(held(&d, 50.0, 50.0), (Some(3), Some(1)));
+        assert_eq!(held(&d, 90.0, 50.0), (Some(1), Some(1)), "inside artboard 1, on the right edge of artboard 3");
     }
 
     #[test]
@@ -1767,6 +2061,14 @@ mod tests {
         assert_eq!(Unit::Points.parse("abc"), None);
         assert_eq!(Unit::Points.format(12.5), "12.5 pt");
         assert_eq!(Unit::Inches.format(144.0), "2 in");
+    }
+
+    #[test]
+    fn negative_picas_and_points_sign_applies_to_whole_value() {
+        assert_eq!(Unit::Points.parse("-2p6"), Some(-30.0));
+        assert_eq!(Unit::Points.parse("-0p6"), Some(-6.0));
+        assert_eq!(Unit::Points.parse("-2p"), Some(-24.0));
+        assert_eq!(Unit::Points.parse("2p6"), Some(30.0));
     }
 }
 

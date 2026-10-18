@@ -8,7 +8,15 @@ description = "VectorZ engine: sessions, history, selection, the command registr
 [lints]
 workspace = true
 
+[features]
+default = ["bundled-fonts"]
+# The fonts vectorz-text bundles (see its `bundled-fonts`). Embedders that supply every font at
+# run time (`vectorz_text::FontDb::add_font`) build with `default-features = false`.
+bundled-fonts = ["vectorz-text/bundled-fonts"]
+
 [dependencies]
+# Which paths stored in documents may be opened.
+craft-docpath = { workspace = true }
 vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
@@ -29,6 +37,8 @@ vectorz-affinity = { workspace = true }
 vectorz-scriptcheck = { workspace = true }
 image = { workspace = true }
 flate2 = { workspace = true }
+# The XML parts of Word documents placed as type (place/docx.rs).
+roxmltree = "0.21"
 kurbo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -40,6 +50,8 @@ vectorz-affinity = { workspace = true, features = ["synth"] }
 crc32fast = { workspace = true }
 vectorz-testkit = { workspace = true }
 proptest = { workspace = true }
+# A variable font built in code (no font file is committed).
+vectorz-text = { workspace = true, features = ["test-fonts"] }
 wat = { workspace = true }
 # Zstandard streams for the Illustrator editing data fuzz tests.
 ruzstd = { workspace = true }

@@ -100,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reshape",
             [],
             None,
-            "{id, x, y, dx, dy, tol=3, radius?} Reshape tool: grab the path at (x, y) (adding an anchor there unless one is within tol) and drag it by (dx, dy); nearby anchors follow with a smooth falloff over radius (default: half the subpath's size)",
+            "{id, x, y, dx, dy, tol=3, radius?} Reshape tool: grab the path at (x, y) (adding an anchor there unless one is within tol) and drag it by (dx, dy); nearby anchors follow with a smooth falloff over radius, measured along the path (default: half the subpath's size)",
             has_doc,
             reshape
         ),
@@ -181,6 +181,9 @@ pub(crate) fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
 /// objects selected whole (those with no entry in the selection's `anchors`).
 pub(crate) fn transform_anchors(s: &mut Session, label: &str, xf: vectorz_geom::Affine, sc: Scaling) -> Result<()> {
     let sel = s.doc()?.selection.clone();
+    let c = xf.as_coeffs();
+    let is_translation = (c[0] - 1.0).abs() < 1e-9 && c[1].abs() < 1e-9 && c[2].abs() < 1e-9 && (c[3] - 1.0).abs() < 1e-9;
+    let delta = vectorz_geom::Vec2::new(c[4], c[5]);
     s.edit(label, |doc, _| {
         for id in &sel.objects {
             match sel.anchors.get(id) {
@@ -196,6 +199,13 @@ pub(crate) fn transform_anchors(s: &mut Session, label: &str, xf: vectorz_geom::
                     if let Some(n) = doc.node_mut(*id) {
                         n.transform(xf, sc);
                     }
+                }
+            }
+        }
+        if is_translation && (delta.x != 0.0 || delta.y != 0.0) {
+            for &i in &sel.guides {
+                if let Some(g) = doc.guides.get_mut(i) {
+                    *g = g.moved(delta);
                 }
             }
         }
@@ -555,8 +565,8 @@ pub(crate) fn delete_anchors(s: &mut Session, _: &Value) -> Result<Value> {
                         })
                         .collect();
                 } else {
-                    // Remove every selected anchor against the original indexes. A closed path opens
-                    // across each deleted run and keeps the surviving stretches in their old order.
+                    // Remove every selected anchor against the original indexes, keeping surviving
+                    // stretches separate rather than joining across deleted anchors.
                     path.subpaths = std::mem::take(&mut path.subpaths)
                         .into_iter()
                         .enumerate()
@@ -583,9 +593,8 @@ pub(crate) fn delete_anchors(s: &mut Session, _: &Value) -> Result<Value> {
     ok()
 }
 
-/// Remove anchors `removed`. An open path stays one path and joins across the gap. A closed path
-/// opens there: each stretch of anchors that were not deleted becomes its own open path, in the
-/// original order, including a stretch that wraps past the last anchor.
+/// Remove anchors and their incident segments, keeping each surviving stretch as an open path.
+/// Only a closed path can have a surviving stretch that wraps past the last anchor.
 fn without_anchors(sp: SubPath, removed: &BTreeSet<usize>) -> Vec<SubPath> {
     let n = sp.anchors.len();
     let gone: BTreeSet<usize> = removed.iter().copied().filter(|&i| i < n).collect();
@@ -593,9 +602,6 @@ fn without_anchors(sp: SubPath, removed: &BTreeSet<usize>) -> Vec<SubPath> {
         return vec![sp];
     }
     let keep = |anchors: Vec<Anchor>| (anchors.len() >= 2).then(|| SubPath::new(anchors, false));
-    if !sp.closed {
-        return keep(sp.anchors.into_iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, a)| a).collect()).into_iter().collect();
-    }
     let mut runs: Vec<Vec<Anchor>> = vec![];
     let mut run = vec![];
     for (i, anchor) in sp.anchors.into_iter().enumerate() {
@@ -607,7 +613,11 @@ fn without_anchors(sp: SubPath, removed: &BTreeSet<usize>) -> Vec<SubPath> {
             run.push(anchor);
         }
     }
-    // The anchors before the first deletion and after the last are one stretch.
+    if !sp.closed {
+        runs.push(run);
+        return runs.into_iter().filter_map(open_run).collect();
+    }
+    // The anchors before the first deletion and after the last are one closed-path stretch.
     if gone.contains(&0) {
         if !run.is_empty() {
             runs.push(run);
@@ -670,18 +680,27 @@ fn reshape(s: &mut Session, p: &Value) -> Result<Value> {
             Some((i, dist)) if dist <= tol => i,
             _ => sp.insert_anchor(seg, t),
         };
-        let origin = sp.anchors[grabbed].p;
+        // Each anchor's distance along the path from the grabbed one, the shorter way round a
+        // closed path: the lengths are measured once, as a path can have many anchors.
+        let pos = sp.anchor_arc_positions();
+        let total = pos.last().copied().unwrap_or(0.0);
+        // The default reach is the subpath's size, as before, now measured along it.
         let r = radius.unwrap_or_else(|| {
             let mut bp = vectorz_geom::BezPath::new();
             sp.to_bezpath_into(&mut bp);
             let b = vectorz_geom::Shape::bounding_box(&bp);
             (b.width().hypot(b.height()) / 2.0).max(1.0)
         });
+        let from = pos.get(grabbed).copied().unwrap_or(0.0);
+        let closed = sp.closed;
         for (i, a) in sp.anchors.iter_mut().enumerate() {
             let w = if i == grabbed {
                 1.0
             } else {
-                let q = (a.p.distance(origin) / r).min(1.0);
+                let d = (pos.get(i).copied().unwrap_or(f64::INFINITY) - from).abs();
+                let d = if closed { d.min(total - d) } else { d };
+                // A distance or radius that isn't finite gives NaN here, which `min` reads as 1: no move.
+                let q = (d / r).min(1.0);
                 (1.0 - q * q).powi(2)
             };
             let v = delta * w;

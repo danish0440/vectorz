@@ -5,6 +5,7 @@ use std::io::Cursor;
 use serde_json::{Value, json};
 use vectorz_doc::{Document, ImageBlob, ImageObject, Node, NodeKind};
 use vectorz_geom::Affine;
+use vectorz_render::effects::pixel::LoadedTexture;
 
 use super::super::*;
 use super::pdfimport::LoadOptions;
@@ -75,9 +76,10 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<&'static Format> {
         return format("svgz");
     }
     if vectorz_pdf::is_postscript(bytes) {
-        // PostScript (.eps, and .ai saved without PDF compatibility) by any name; .ai and .ait
-        // keep their meaning (a template), read as PostScript all the same.
-        return by_name.filter(|f| matches!(f.id, "ai" | "ait")).or_else(|| format("eps"));
+        // PostScript (.eps, .ps, and .ai saved without PDF compatibility) by any name; .ai, .ait
+        // and .ps keep their meaning (a template, a PostScript file), read as PostScript all the
+        // same.
+        return by_name.filter(|f| matches!(f.id, "ai" | "ait" | "ps")).or_else(|| format("eps"));
     }
     if bytes.starts_with(b"%PDF") {
         // .ai and .ait files are PDF inside; the extension keeps the template meaning.
@@ -153,17 +155,24 @@ pub fn load(name: &str, bytes: &[u8]) -> Result<Loaded> {
 /// A PDF-compatible `.ai`, or a PDF saved with the editing data, read through the editor's own copy
 /// of its art, which it carries: its layers and hidden objects as they were, and the art outside
 /// its artboard (its PDF part has only what is on the artboards), as an EPS of the editor is read.
-/// Anything else as it was.
-fn through_editing_data(bytes: &[u8], opts: &LoadOptions, doc: Document, warnings: Vec<String>) -> (Document, Vec<String>) {
+/// Anything else as it was. `unit`: the size in points of a unit of the PDF part's user space (its
+/// first page's `UserUnit`).
+fn through_editing_data(bytes: &[u8], opts: &LoadOptions, doc: Document, warnings: Vec<String>, unit: f64) -> (Document, Vec<String>) {
     if opts.pages.is_some() || !opts.layers || !opts.editing_data {
         return (doc, warnings);
     }
     let Some(private) = vectorz_pdf::illustrator_data(bytes, opts.password.as_deref()) else { return (doc, warnings) };
     let outlined = opts.text_as == vectorz_pdf::TextAs::Outlines;
-    let (doc, mut warnings, read) = vectorz_eps::layered_ai(&private, doc, warnings, outlined, opts.trust_editing_data);
+    let (doc, mut warnings, read) = vectorz_eps::layered_ai(&private, doc, warnings, outlined, opts.trust_editing_data, unit);
     // The layers weren't read (or couldn't be): the notes of reading the PDF part still hold.
     if !read {
         return (doc, warnings);
+    }
+    // The layers' text objects hold type and the stroked paths around it, which can include stroked
+    // glyphs the PDF part kept as outlines: without any such glyph in the document, the warnings on
+    // outlines are dropped.
+    if !vectorz_pdf::holds_outlines(&doc) {
+        warnings.retain(|w| !vectorz_pdf::is_outlines_note(w));
     }
     // The layers hold the art that the PDF part leaves out or, in a PDF, that the import clipped
     // to the page.
@@ -195,8 +204,8 @@ pub fn load_with(name: &str, bytes: &[u8], opts: &LoadOptions) -> Result<Loaded>
     let mut converted = false;
     let mut preview_only = false;
     let (mut doc, mut warnings, restored) = match format.id {
-        // EPS and PostScript .ai: the document our EPS files carry, else the PostScript read.
-        _ if format.id == "eps" || vectorz_pdf::is_postscript(bytes) => {
+        // EPS, .ps and PostScript .ai: the document our EPS files carry, else the PostScript read.
+        _ if matches!(format.id, "eps" | "ps") || vectorz_pdf::is_postscript(bytes) => {
             let editing = vectorz_eps::has_native(bytes).then_some((true, || vectorz_eps::native(bytes)));
             restore_or_import(editing, || {
                 let r = vectorz_eps::import_with(bytes, opts.editing_data).map_err(|e| err(format!("can't open `{}`: {e}", file_name(name))))?;
@@ -228,7 +237,7 @@ pub fn load_with(name: &str, bytes: &[u8], opts: &LoadOptions) -> Result<Loaded>
                     // Pages of text alone: the editing copy alone where it reads, as for a file
                     // saved without its PDF part (#1387: else the page, which is the art).
                     let alone = r.only_text.then(|| from_editing_data_alone(bytes, opts)).flatten().and_then(|read| read.ok());
-                    Ok(alone.unwrap_or_else(|| through_editing_data(bytes, opts, r.document, r.warnings)))
+                    Ok(alone.unwrap_or_else(|| through_editing_data(bytes, opts, r.document, r.warnings, r.user_unit)))
                 }
                 // Saved without its PDF part: the editing copy is all the file has.
                 Err(e) if e.to_string() == vectorz_pdf::PdfError::PlaceholderOnly.to_string() => {
@@ -253,9 +262,21 @@ pub fn load_with(name: &str, bytes: &[u8], opts: &LoadOptions) -> Result<Loaded>
         _ if format.raster => (raster_doc(&title, bytes)?, vec![], false),
         _ => return Err(err(format!("{} files can't be opened yet", format.label))),
     };
-    // Threaded type read from a file flows through its frames.
+    // A PDF, `.ai` or `.ait` read from its pages or its editing copy, not restored from the document
+    // it carries, opens with the File Info it gives (a PostScript `.ai` gives none).
+    if matches!(format.id, "pdf" | "ai" | "ait")
+        && !restored
+        && let Some(info) = vectorz_pdf::file_info(bytes, opts.password.as_deref())
+    {
+        super::super::fileinfo::read_pdf(&mut doc.metadata, info);
+    }
+    // Threaded type read from a file flows through its frames (the threaded type of a restored
+    // document keeps its text as saved), and every frame of a thread takes its first frame's
+    // Optical Margin Alignment setting.
     if !doc.text_threads.is_empty() && !restored {
         crate::cmd::threads::reflow(&Document::new(1.0, 1.0), &mut doc);
+    } else if !doc.text_threads.is_empty() {
+        crate::cmd::threads::share_optical_margin(&mut doc);
     }
     if let Some(mode) = opts.color_mode.filter(|m| *m != doc.color_mode) {
         super::super::colormgmt::set_color_mode(&mut doc, mode, true, None, opts.grays);
@@ -276,8 +297,11 @@ pub(crate) fn import_svg(text: &str, folder: Option<&str>) -> Result<(Document, 
     // The importer reads on a thread of its own (for its stack): what may be read is what may be
     // read here.
     let scope = crate::file_access::ScopeHandle::capture();
+    // Paths are checked as stored in a document inside `folder` (only the folder is used).
+    let document = folder.map(|f| std::path::Path::new(f).join("-").to_string_lossy().into_owned());
     let read = |path: &str| {
         scope.clone().run(|| {
+            let path = &super::document_path(path, document.as_deref()).ok()?;
             // Only files (not folders or devices) are read.
             file_stamp(path)?;
             let bytes = read_file(path).ok()?;
@@ -367,6 +391,11 @@ fn open_loaded(s: &mut Session, loaded: Loaded, links: Resolved, path: Option<St
         doc.template = false;
         doc.title = s.next_untitled();
     }
+    // A .ai (or .ait) another app wrote carries no open Layers rows we read: all of them start
+    // closed, its top-level layers as its groups (#1475). Ours carry their own.
+    if matches!(format.id, "ai" | "ait") && !restored && doc.layers_open.is_none() {
+        doc.layers_open = Some(vec![]);
+    }
     // Save writes the file back only in a format it writes, only a whole PDF (see
     // [`LoadOptions::is_partial`]), and a .ai file only when it carried the native document (Save
     // writes .ai that way).
@@ -426,24 +455,39 @@ pub(super) fn new_from_template(s: &mut Session, p: &Value) -> Result<Value> {
 /// that default: wasm32 has 4 GB to address and aborts when an allocation fails.
 pub(crate) use vectorz_doc::MAX_RASTER_ALLOC;
 
-/// What to say of encoded image `bytes` that need more than [`MAX_RASTER_ALLOC`] to decode (its
-/// header says so; the pixels aren't read): the renderer, which has the same allowance, draws
-/// nothing for them, so Open, Place and the Links panel say it (#1479). `None` for images that
-/// decode, and for bytes that aren't an image.
+/// What to say of encoded image `bytes` that need more than [`MAX_RASTER_ALLOC`] to decode,
+/// counted as RGBA (4 bytes a pixel) or as the decoder gives them when that is more (its header
+/// says so; the pixels aren't read): Open, Place and the Links panel say it (#1479). `None` for
+/// images within the allowance, and for bytes that aren't an image.
 pub(crate) fn too_large_note(bytes: &[u8]) -> Option<String> {
     use image::ImageDecoder as _;
+    if let Some((w, h)) = vectorz_doc::cmyk::oversized_tiff(bytes) {
+        return Some(format!("an image of {w} × {h} pixels is too large to draw"));
+    }
     let d = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_decoder().ok()?;
     let (w, h) = d.dimensions();
-    (d.total_bytes() > MAX_RASTER_ALLOC).then(|| format!("an image of {w} × {h} pixels is too large to draw"))
+    // The allowance also counts the pixels as RGBA: an image of fewer than 4 bytes a pixel (gray,
+    // gray with alpha, RGB) takes more than the decoder counts (#1717).
+    let rgba_over = u64::from(w) * u64::from(h) > MAX_RASTER_ALLOC / 4;
+    (rgba_over || d.total_bytes() > MAX_RASTER_ALLOC).then(|| format!("an image of {w} × {h} pixels is too large to draw"))
 }
 
 /// Decode an image's header (and, for formats stored as PNG, its pixels). CMYK TIFFs are kept as
-/// they are, with their ink amounts ([`ImageBlob::cmyk`]); CMYK TIFFs with an alpha channel, which
-/// the decoder can't read, become RGBA in the active colour settings' CMYK, as do CMYK Photoshop
-/// documents, whose merged image is read ([`psdread`]). Grayscale TIFFs with an alpha channel or
-/// other extra channels, which the decoder can't read either, become RGBA too.
+/// they are, with their ink amounts ([`ImageBlob::cmyk`]), except that ones storing one plane per
+/// ink are written again with their inks together ([`vectorz_doc::cmyk::stored_cmyk_tiff`]);
+/// CMYK TIFFs with an alpha channel, which the decoder can't read, become RGBA in the active color
+/// settings' CMYK, as do CMYK Photoshop documents, whose merged image is read ([`psdread`]).
+/// 1-bit TIFFs compressed with CCITT Group 3, which the decoder can't read either, become RGBA
+/// too ([`vectorz_doc::cmyk::group3_tiff_rgba`]).
+/// Grayscale TIFFs with an alpha channel or other extra channels, which the decoder can't read
+/// either, become RGBA too, whether they store their channels together or one plane per channel.
+/// A TIFF with more strips or tiles than the decoder can count
+/// ([`vectorz_doc::cmyk::oversized_tiff`]) is refused as too large to draw.
 pub fn raster_image(bytes: &[u8]) -> Result<RasterImage> {
     let ppi = super::ppi::resolution(bytes);
+    if let Some((w, h)) = vectorz_doc::cmyk::oversized_tiff(bytes) {
+        return Err(err(format!("an image of {w} × {h} pixels is too large to draw")));
+    }
     if psdread::is_psd(bytes) {
         let cms = vectorz_color::cms::active();
         return as_png(psdread::decode(bytes, MAX_RASTER_ALLOC, |c| cms.cmyk_to_srgb(c, false)).map_err(err)?, ppi);
@@ -454,10 +498,14 @@ pub fn raster_image(bytes: &[u8]) -> Result<RasterImage> {
     reader.limits(limits);
     let kind = reader.format().ok_or_else(|| err("not an image VectorZ reads (see document.formats)"))?;
     let f = image_format(kind).ok_or_else(|| err(format!("{kind:?} images can't be opened (see document.formats)")))?;
-    let cmyk = || ImageBlob::new(f.mime, bytes.to_vec()).cmyk().is_some();
-    if matches!(f.id, "png" | "jpg" | "gif" | "webp") || (f.id == "tiff" && cmyk()) {
+    let kept = match f.id {
+        "png" | "jpg" | "gif" | "webp" => Some(bytes.to_vec()),
+        "tiff" => vectorz_doc::cmyk::stored_cmyk_tiff(bytes, ppi),
+        _ => None,
+    };
+    if let Some(kept) = kept {
         let (width, height) = reader.into_dimensions().map_err(err)?;
-        return stored(bytes.to_vec(), f.mime, (width, height), ppi);
+        return stored(kept, f.mime, (width, height), ppi);
     }
     let extra_samples = || {
         let cms = vectorz_color::cms::active();
@@ -465,7 +513,10 @@ pub fn raster_image(bytes: &[u8]) -> Result<RasterImage> {
     };
     let img = match (f.id == "tiff").then(extra_samples).flatten() {
         Some(img) => img,
-        None => reader.decode().map_err(err)?.to_rgba8(),
+        None => match (f.id == "tiff").then(|| vectorz_doc::cmyk::group3_tiff_rgba(bytes)).flatten() {
+            Some(read) => read.map_err(err)?,
+            None => reader.decode().map_err(err)?.to_rgba8(),
+        },
     };
     as_png(img, ppi)
 }
@@ -480,6 +531,43 @@ fn as_png(img: image::RgbaImage, ppi: Option<(f64, f64)>) -> Result<RasterImage>
         None => png,
     };
     stored(png, "image/png", size, ppi)
+}
+
+/// Effect › Distort › Glass › Load Texture…: encoded image `bytes`, in any format [`raster_image`]
+/// reads, as the `textureImage` Glass stores ([`LoadedTexture::to_stored`]). The pixels are decoded
+/// within [`MAX_RASTER_ALLOC`], counted as RGBA, as the renderer decodes them (#1717); a CMYK image
+/// is converted with the active color settings.
+pub fn texture_image(bytes: &[u8]) -> Result<String> {
+    if let Some(note) = too_large_note(bytes) {
+        return Err(err(note));
+    }
+    let RasterImage { blob, width, height, .. } = raster_image(bytes)?;
+    // The allowance counts the pixels as RGBA: a gray image takes four times its file's samples (#1717).
+    if u64::from(width) * u64::from(height) * 4 > MAX_RASTER_ALLOC {
+        return Err(err(format!("an image of {width} × {height} pixels is too large to draw")));
+    }
+    let texture = match blob.cmyk() {
+        Some(inks) => {
+            let cms = vectorz_color::cms::active();
+            let rgba: Vec<u8> = (inks.data.as_chunks::<4>().0.iter())
+                .flat_map(|c| {
+                    let rgb = cms.cmyk_to_srgb(c.map(|v| f32::from(v) / 255.0), false);
+                    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    [r, g, b, 255]
+                })
+                .collect();
+            LoadedTexture::from_rgba(inks.width, inks.height, &rgba)
+        }
+        None => {
+            let mut reader = image::ImageReader::new(Cursor::new(blob.bytes.as_slice())).with_guessed_format().map_err(err)?;
+            let mut limits = image::Limits::default();
+            limits.max_alloc = Some(MAX_RASTER_ALLOC);
+            reader.limits(limits);
+            let img = reader.decode().map_err(err)?.to_rgba8();
+            LoadedTexture::from_rgba(img.width(), img.height(), img.as_raw())
+        }
+    };
+    texture.and_then(|t| t.to_stored()).ok_or_else(|| err("the image can't be read as a texture"))
 }
 
 /// An image's encoded `bytes`, `width` × `height` pixels, ready to embed.

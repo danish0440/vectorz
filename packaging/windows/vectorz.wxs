@@ -50,6 +50,7 @@
 
     <Feature Id="Main" Title="VectorZ" Level="1">
       <ComponentGroupRef Id="VectorzFiles" />
+      <ComponentGroupRef Id="PdfDocumentation" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
@@ -108,6 +109,9 @@
   </Package>
 
   <Fragment>
+    <ComponentGroup Id="PdfDocumentation" Directory="INSTALLFOLDER">
+      <Files Include="$(var.DocsDir)\**" />
+    </ComponentGroup>
     <ComponentGroup Id="VectorzFiles" Directory="INSTALLFOLDER">
       <Component Id="VectorzApp" Guid="2CEEAECB-0F37-58E7-A468-AE128610B9CF">
         <File Id="VectorzExe" Source="$(var.BinDir)\vectorz.exe" KeyPath="yes">
