@@ -398,13 +398,13 @@ fn the_worker_makes_the_formats_the_session_makes() {
     // to another second since the Copy, they are compared again after another Copy.
     let check = |app: &mut VectorzApp, what: &str, mimes: &[&str]| {
         for _ in 0..100 {
-            let second = vectorz_doc::metadata::now_unix();
+            let second = vectorz_doc::metadata::output_time();
             run(app, "edit.copy", json!({}));
             assert_eq!(app.background.jobs.len(), 1, "{what}: made on the worker");
             background::wait_all(app);
             assert_eq!(written(&board), mimes, "{what}");
             let session = app.session.clipboard_flavours();
-            let dated = mimes.contains(&PDF) && vectorz_doc::metadata::now_unix() != second;
+            let dated = mimes.contains(&PDF) && vectorz_doc::metadata::output_time() != second;
             if board.borrow().flavours == session || !dated {
                 assert_eq!(board.borrow().flavours, session, "{what}");
                 return;

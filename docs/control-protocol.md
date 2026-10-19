@@ -880,9 +880,30 @@ split paths return an error without changing the workspace.
 - [x] Release connection slots on worker exit, including timeout and failed worker creation.
 - [x] Preserve correlated replies and persistent connections within the transport budgets.
 
+## In the browser: `window.vectorz`
+
+The web build has no TCP server (a page can't listen on a socket), so it offers the same methods to the
+page itself, as promises on `window.vectorz` (`apps/vectorz-web/src/api.rs`). An agent driving VectorZ in a
+browser tab, or a host app showing it in an `<iframe>`, uses the commands it would send to the desktop
+app:
+
+| Call | |
+|---|---|
+| `vectorz.request(method, params)` | any control method of this document → its `result` |
+| `vectorz.execute(command, params)` | `engine.execute` |
+| `vectorz.commands()` / `vectorz.inspect()` | `engine.commands` / the inspect method |
+| `vectorz.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `vectorz.openFile(name, bytes)` | opens the bytes the way a dropped file opens (returns `true` once queued) |
+| `vectorz.captureDownloads(on)` | while on, a save or export is kept in the page instead of downloaded |
+| `vectorz.files()` / `vectorz.readFile(name)` | the kept files (`{path, size}`) / one of them as a `Uint8Array` |
+
+Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
+hidden tab (whose frames the browser pauses) answers when it is shown again.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-13 | minor | Documented count, pending-event and per-frame request budgets (#1709). |
 | 2026-10-13 | minor | Documented transport deadlines and connection-slot recovery (#1726). |
+| 2026-10-18 | minor | Documented `window.vectorz`, the web build's control channel. |
