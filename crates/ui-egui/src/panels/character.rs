@@ -535,7 +535,7 @@ pub(crate) fn font_pickers(app: &mut VectorzApp, ui: &mut Ui, s: &CharStyle, ids
 
 /// The Variable Font button, `width` wide, shown when the font of style `s` is a variable font: it
 /// opens the font's axis sliders ([`axis_sliders`]).
-fn variable_font(app: &mut VectorzApp, ui: &mut Ui, s: &CharStyle, width: f32) {
+pub(crate) fn variable_font(app: &mut VectorzApp, ui: &mut Ui, s: &CharStyle, width: f32) {
     let Some(face) = vectorz_text::FontDb::global().face_version(&s.font_family, &s.font_style, s.font_version.as_deref()) else { return };
     if face.axes().iter().all(|a| a.hidden) {
         return;
