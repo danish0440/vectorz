@@ -2,6 +2,6 @@ rebrand vectorcraft -> VectorZ
 about credit inserted in: ['crates/ui-egui/src/dialogs/about.rs (fallback, after line 59)']
 launcher patches: []
 lines still naming ArtCraft/getartcraft/discord (non-doc): 3
+crates/engine/src/cmd/help.rs:1: //! Help → community and project links (the ArtCraft Discord, website, this app's page and its
 crates/ui-egui/src/dialogs/about.rs:60: // PINTAZ-ABOUT: required credit (Apache-2.0 change notice; ArtCraft brand licence)
 crates/ui-egui/src/dialogs/about.rs:62: ui.label("Based on VectorCraft by Storytold (ArtCraft), Apache-2.0. Changes by PINTAZ TECHNOLOGIES.");
-crates/engine/src/cmd/help.rs:1: //! Help → community and project links (the ArtCraft Discord, website, this app's page and its

@@ -167,6 +167,7 @@ Generated-in-code art is original and has no file to list. This covers the defau
 | `assets/icons/dc-new-fill.svg` | VectorZ contributors | Original work, drawn for VectorZ | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-new-item.svg` | VectorZ contributors | Original work, drawn for VectorZ | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-new-stroke.svg` | VectorZ contributors | Original work, drawn for VectorZ | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-objects-on-path.svg` | VectorZ contributors | Original work, drawn for VectorZ: three small squares along a curve | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-options.svg` | VectorZ contributors | Original work, drawn for VectorZ | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-para-center.svg` | VectorZ contributors | Original work, drawn for VectorZ | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-para-justify-all.svg` | VectorZ contributors | Original work, drawn for VectorZ | MIT OR Apache-2.0 |  |

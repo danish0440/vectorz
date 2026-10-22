@@ -177,7 +177,10 @@ fn run(app: &mut VectorzApp, d: &mut Dialog, act: Action, current: &str) -> Resu
                 f();
                 return Ok(());
             }
-            let pick = crate::FilePick { filters: vec![("PDF presets", vectorz_engine::cmd::pdfcmds::PRESET_EXTS)], ..Default::default() };
+            let pick = crate::FilePick {
+                filters: vec![crate::FilePick::filter("PDF presets", vectorz_engine::cmd::pdfcmds::PRESET_EXTS)],
+                ..Default::default()
+            };
             let path = crate::picks::open(app, &pick).ok_or("cancelled")?;
             let r = app.run("pdf.preset.import", json!({ "path": path }))?;
             if let Some(first) = r["imported"].get(0).and_then(Value::as_str) {

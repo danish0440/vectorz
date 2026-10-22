@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
-vectorz-engine = { workspace = true }
+vectorz-engine = { workspace = true, features = ["bundled-fonts"] }
 vectorz-format = { workspace = true }
 vectorz-geom = { workspace = true }
 vectorz-svg = { workspace = true }
