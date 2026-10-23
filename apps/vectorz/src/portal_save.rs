@@ -326,7 +326,11 @@ mod tests {
         let pick = FilePick {
             name: "Untitled-1.vectorz".into(),
             folder: Some("/home/me/Art".into()),
-            filters: vec![("VectorZ", &["vectorz"]), ("SVG", &["svg"]), ("PDF-compatible .ai", &["ai"])],
+            filters: vec![
+                FilePick::filter("VectorZ", &["vectorz"]),
+                FilePick::filter("SVG", &["svg"]),
+                FilePick::filter("PDF-compatible .ai", &["ai"]),
+            ],
         };
         SaveRequest::new(&pick, "x11:3a0000f".into())
     }

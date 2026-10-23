@@ -4,5 +4,6 @@ nix.yml
 packaging-lint.yml
 print.yml
 release.yml
+sonarcloud.yml
 windows-arm64.yml
 windows7.yml
