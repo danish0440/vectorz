@@ -172,7 +172,8 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
         let path = match d.str("path") {
             p if !p.is_empty() => p,
             _ => {
-                let pick = crate::FilePick { filters: vectorz_engine::cmd::fileio::place_filters().collect(), ..Default::default() };
+                let pick =
+                    crate::FilePick { filters: crate::FilePick::filters(vectorz_engine::cmd::fileio::place_filters()), ..Default::default() };
                 crate::picks::open(app, &pick).ok_or("cancelled")?
             }
         };

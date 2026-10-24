@@ -14,7 +14,7 @@ name = "vectorz-web"
 path = "src/main.rs"
 
 [dependencies]
-vectorz-engine = { workspace = true }
+vectorz-engine = { workspace = true, features = ["bundled-fonts"] }
 vectorz-ui-egui = { workspace = true }
 vectorz-format = { workspace = true }
 vectorz-text = { workspace = true }
