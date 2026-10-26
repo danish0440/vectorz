@@ -43,6 +43,7 @@ modules:
     build-commands:
       - cargo --offline build --release --locked -p vectorz
       - install -Dm755 target/release/vectorz /app/bin/vectorz
+      - install -Dm644 NOTICE /app/share/doc/vectorz/NOTICE
       - install -Dm644 packaging/linux/com.pintaz.vectorz.desktop /app/share/applications/com.pintaz.vectorz.desktop
       - install -Dm644 packaging/linux/com.pintaz.vectorz.mime.xml /app/share/mime/packages/com.pintaz.vectorz.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/
