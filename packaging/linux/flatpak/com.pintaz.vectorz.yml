@@ -22,6 +22,8 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
+  # Network for the update check against GitHub releases.
+  - --share=network
   # Cursor theme: without the cursor-shape protocol (e.g. GNOME 46) winit loads the theme itself.
   # The sandbox sets no XCURSOR_PATH and ships no cursor themes, so the pointer would turn invisible
   # over the window. The host's themes are mounted under /run/host (#2450).
@@ -43,6 +45,7 @@ modules:
     build-commands:
       - cargo --offline build --release --locked -p vectorz
       - install -Dm755 target/release/vectorz /app/bin/vectorz
+      - install -Dm644 NOTICE /app/share/doc/vectorz/NOTICE
       - install -Dm644 packaging/linux/com.pintaz.vectorz.desktop /app/share/applications/com.pintaz.vectorz.desktop
       - install -Dm644 packaging/linux/com.pintaz.vectorz.mime.xml /app/share/mime/packages/com.pintaz.vectorz.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/

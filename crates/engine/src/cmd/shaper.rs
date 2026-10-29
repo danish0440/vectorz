@@ -2,14 +2,14 @@
 //! art retained underneath. Recipes select topology regions; source edits re-evaluate them in
 //! the same undo transaction. Rendering and exporters only see ordinary groups and paths.
 use super::pathops::Beside;
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_or, checked_ids_param, cmd, f64_or, has_doc, id_param, point_param};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 use vectorz_doc::shaper::{EdgeEdit, FILL_PREFIX, FaceEdit, FaceSelector, SOURCES, STROKE_PREFIX, ShaperSpec};
 use vectorz_doc::{Appearance, AppearanceItem, Document, Node, NodeId, NodeKind};
 use vectorz_geom::{FillRule, PathData, Point, Rect, Shape as _};
 use vectorz_pathops as po;
-use vectorz_tools::builder::{self as b, BuilderMap, Hit};
+use vectorz_tools::builder::{self as b, BuilderMap};
 
 const MAX_SOURCES: usize = 64;
 const MAX_POINTS: usize = 4096;
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Shaper Face",
             [],
             None,
-            "{point: [x,y], source?: bool} click selects a group, then a face; source enters construction isolation and selects an original; while a group's originals are isolated, it selects one of that group's originals → {id}",
+            "{point: [x,y], source?: bool} click selects a group, then a face; source enters construction isolation and selects an original (while an opacity mask or a pattern is edited, it selects the original and the editing layer stays isolated); while a group's originals are isolated, it selects one of that group's originals → {id}",
             has_doc,
             select
         ),
@@ -511,10 +511,11 @@ fn candidates(s: &Session, p: &Value, points: &[Point], tolerance: f64) -> Resul
     let supplied = p.get("ids").map(|_| checked_ids_param(s, p, "ids", "shaper.scribble")).transpose()?;
     let expand = supplied.is_none() && st.selection.objects.len() < 2;
     let ids = supplied.unwrap_or_else(|| if st.selection.objects.len() > 1 { st.selection.objects.clone() } else { st.doc.selectable_art() });
+    let editable = st.doc.editable();
     let eligible: Vec<NodeId> = ids
         .into_iter()
         .filter(|id| {
-            st.doc.is_editable(*id)
+            editable(*id)
                 && st.doc.node(*id).is_some_and(|n| {
                     !matches!(n.kind, NodeKind::Path { guide: true, .. } | NodeKind::Path { clipping: true, .. })
                         && (n.extras().shaper.is_some() || b::node_outline(n).is_some())
@@ -616,8 +617,9 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
     let edits = face_edits(&map, &src, &spec);
     let filled = |i: usize| edits.get(&i).is_none_or(|e| !e.erase) && map.regions.get(i).and_then(|r| fill_source(&src, &r.0)).is_some();
     let components = visible_components(&map, &src, &edits);
+    // Every face the scribble crosses, however narrow.
     let faces: std::collections::BTreeSet<usize> =
-        points.iter().filter_map(|p| map.region_at(*p)).filter(|i| filled(*i)).filter_map(|i| components.get(i).copied()).collect();
+        map.hits_along(&pts, None).regions.into_iter().filter(|i| filled(*i)).filter_map(|i| components.get(i).copied()).collect();
     let touched: Vec<usize> = components.iter().enumerate().filter(|(_, c)| faces.contains(c)).map(|(i, _)| i).collect();
     let first = points.first().copied().unwrap_or(Point::ZERO);
     let last = points.last().copied().unwrap_or(first);
@@ -641,19 +643,12 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut strokes = 0;
     if touched.is_empty() {
-        let mut piece_ids = vec![];
+        // Every stroke the scribble crosses or passes within `tolerance` of, however small that is.
+        let mut hits = map.hits_along(&pts, Some(tolerance));
         for point in &points {
-            let index = match map.hit(*point, Some(tolerance)) {
-                Some(Hit::Line(i)) => Some(map.edges.len() + i),
-                Some(Hit::Edge(i)) => Some(i),
-                _ => None,
-            };
-            if let Some(i) = index
-                && !piece_ids.contains(&i)
-            {
-                piece_ids.push(i);
-            }
+            hits.add(map.hit(*point, Some(tolerance)));
         }
+        let piece_ids = hits.edges.iter().copied().chain(hits.lines.iter().map(|i| map.edges.len() + i));
         for i in piece_ids {
             if let Some(e) = pieces(&map).get(i).and_then(|p| edge_selector(&map, &src, p)) {
                 spec.edges.push(e);
@@ -683,7 +678,7 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
         sel.set([id]);
         Ok(id)
     })?;
-    s.doc_mut()?.isolation = None;
+    end_isolation(s)?;
     Ok(json!({"id": id.0, "regions": touched.len(), "strokes": strokes}))
 }
 
@@ -691,10 +686,11 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
 /// When `within` is given, only that group is considered.
 fn group_at(d: &Document, point: Point, construction: bool, within: Option<NodeId>) -> Option<NodeId> {
     let mut groups = vec![];
+    let editable = d.editable();
     d.walk(|n| {
         if n.extras().shaper.is_some()
             && within.is_none_or(|g| g == n.id)
-            && d.is_editable(n.id)
+            && editable(n.id)
             && (if construction { source_group(n).and_then(Node::geometric_bounds) } else { n.geometric_bounds() })
                 .is_some_and(|b| b.inflate(6.0, 6.0).contains(point))
         {
@@ -734,12 +730,24 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         group
     };
-    let isolation = source.then(|| source_group(node).map(|n| n.id)).flatten();
+    // While an opacity mask or a pattern is edited, the source pick leaves its editing layer isolated.
+    let isolation = source.then(|| source_group(node).map(|n| n.id)).flatten().filter(|_| editing_layer(&st.doc).is_none());
     s.select(|_, sel| sel.set([target]))?;
     if let Some(id) = isolation {
         s.doc_mut()?.isolation = Some(id);
     }
     Ok(json!({"id": target.0}))
+}
+/// The layer an opacity mask or a pattern is edited in, which stays isolated while that mode is on.
+fn editing_layer(d: &Document) -> Option<NodeId> {
+    d.mask_edit.map(|m| m.layer).or_else(|| d.pattern_edit.as_ref().map(|e| e.layer))
+}
+/// Leave isolation mode, Construction mode included. While an opacity mask or a pattern is edited,
+/// its editing layer stays isolated.
+fn end_isolation(s: &mut Session) -> Result<()> {
+    let st = s.doc_mut()?;
+    st.isolation = editing_layer(&st.doc);
+    Ok(())
 }
 fn target(s: &Session, p: &Value) -> Result<NodeId> {
     let id = id_param(p, "id")
@@ -761,7 +769,7 @@ fn release(s: &mut Session, p: &Value) -> Result<Value> {
         sel.set(ids.iter().copied());
         Ok(ids)
     })?;
-    s.doc_mut()?.isolation = None;
+    end_isolation(s)?;
     Ok(json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()}))
 }
 fn expand(s: &mut Session, p: &Value) -> Result<Value> {
@@ -778,6 +786,6 @@ fn expand(s: &mut Session, p: &Value) -> Result<Value> {
         sel.set([id]);
         Ok(())
     })?;
-    s.doc_mut()?.isolation = None;
+    end_isolation(s)?;
     Ok(json!({"id": id.0}))
 }
