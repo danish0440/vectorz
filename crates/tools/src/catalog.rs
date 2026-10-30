@@ -101,7 +101,7 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
     &[t("mesh", "Mesh Tool", Some("U"), "tool-mesh")],
     &[t("gradient", "Gradient Tool", Some("G"), "tool-gradient")],
     &[t("eyedropper", "Eyedropper Tool", Some("I"), "tool-eyedropper"), t("measure", "Measure Tool", None, "tool-measure")],
-    &[t("blend", "Blend Tool", Some("W"), "tool-blend")],
+    &[t("blend", "Blend Tool", Some("W"), "tool-blend"), t("objectsOnPath", "Objects on Path Tool", None, "tool-objects-on-path")],
     &[t("dimension", "Dimension Tool", None, "tool-dimension")],
     &[
         t("symbolSprayer", "Symbol Sprayer Tool", Some("Shift+S"), "tool-symbol"),
@@ -137,8 +137,9 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
     &[t("zoom", "Zoom Tool", Some("Z"), "tool-zoom")],
 ];
 
+/// Every tool: the toolbar's, then the add-ons' ([`crate::addons::GROUPS`]).
 pub fn all_tools() -> impl Iterator<Item = &'static ToolInfo> {
-    TOOL_GROUPS.iter().flat_map(|g| g.iter())
+    TOOL_GROUPS.iter().chain(crate::addons::GROUPS).flat_map(|g| g.iter())
 }
 
 pub fn tool_info(id: &str) -> Option<&'static ToolInfo> {

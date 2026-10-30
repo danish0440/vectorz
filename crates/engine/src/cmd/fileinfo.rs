@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use vectorz_doc::metadata::{MAX_RATING, iso8601};
 use vectorz_doc::{ColorMode, CopyrightStatus, DocMetadata, Document};
 
-use super::*;
+use super::{Result, Session, bad};
 
 const C: &str = "file.info";
 /// Longest text field, in characters.
