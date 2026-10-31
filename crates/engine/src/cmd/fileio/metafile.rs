@@ -7,7 +7,7 @@ use serde_json::Value;
 use vectorz_doc::Document;
 use vectorz_metafile::Kind;
 
-use super::super::*;
+use super::super::{Result, bad};
 use super::{ArtboardPick, Encoded, FormatOption};
 
 const C: &str = "document.export";

@@ -9,7 +9,7 @@ use vectorz_color::harmony::{Harmony, THEME_SIZE};
 use vectorz_color::recolor::ColorKey;
 use vectorz_tools::params::color_json;
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, cmd, color_value, has_doc, str_param};
 
 /// A saved colour theme ([`crate::Prefs::color_themes`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
