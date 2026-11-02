@@ -16,7 +16,7 @@ use vectorz_doc::{Appearance, AppearanceItem, FillLayer, GraphicStyle, Node, Nod
 use vectorz_tools::PaintDefaults;
 
 use super::gradient::unplaced;
-use super::*;
+use super::{CommandSpec, Result, Session, always, cmd};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

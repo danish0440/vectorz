@@ -66,9 +66,12 @@ const DOCUMENT_FREE: &[&str] = &[
     "ui.checkScript",
     "window.swatchLibrary.other",
     "window.graphicStyleLibrary.other",
+    "ui.libraryPanel.locate",
     "shortcuts.import",
     "shortcuts.export",
     "ui.shortcutImportDialog",
+    crate::panels::actions::SAVE_SET,
+    crate::panels::actions::LOAD_SET,
 ];
 
 impl Entry {
