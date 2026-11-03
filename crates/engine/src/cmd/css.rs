@@ -8,7 +8,7 @@ use vectorz_doc::NodeId;
 use vectorz_svg::{CssOptions, CssSheet, css_rules};
 
 use super::fileio::{default_name, encode_with_warnings, isolated, write_file};
-use super::*;
+use super::{CommandSpec, Result, Session, bad, cmd, has_doc, str_param, targets};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

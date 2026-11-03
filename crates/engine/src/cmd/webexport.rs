@@ -21,7 +21,7 @@ use vectorz_render::encode::quantize::{self, Dither, Indexed, PaletteOptions, Re
 use vectorz_render::encode::web::{self, ColorSort};
 use vectorz_render::encode::{gif, jpeg, png};
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, bool_or, cmd, f64_or, has_doc, str_param, unique_name};
 
 const C: &str = "document.exportForWeb";
 

@@ -1,7 +1,21 @@
 rebrand vectorcraft -> VectorZ
 about credit inserted in: ['crates/ui-egui/src/dialogs/about.rs (fallback, after line 59)']
 launcher patches: []
-lines still naming ArtCraft/getartcraft/discord (non-doc): 3
+lines still naming ArtCraft/getartcraft/discord (non-doc): 17
 crates/ui-egui/src/dialogs/about.rs:60: // PINTAZ-ABOUT: required credit (Apache-2.0 change notice; ArtCraft brand licence)
 crates/ui-egui/src/dialogs/about.rs:62: ui.label("Based on VectorCraft by Storytold (ArtCraft), Apache-2.0. Changes by PINTAZ TECHNOLOGIES.");
 crates/engine/src/cmd/help.rs:1: //! Help → community and project links (the ArtCraft Discord, website, this app's page and its
+packaging/windows/install-policy.wxi:34: <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder" Value="[%ProgramFiles(x86)]\ArtCraft\VectorZ\" After="CraftRestoreUserFolder" Sequence="ui" C
+packaging/windows/install-policy.wxi:35: <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder32" Value="[%ProgramFiles]\ArtCraft\VectorZ\" After="CraftDefaultMachineFolder" Sequence="ui" C
+packaging/windows/install-policy.wxi:36: <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultUserFolder" Value="[LocalAppDataFolder]Programs\ArtCraft\VectorZ\" After="CraftDefaultMachineFolder32" Seque
+packaging/windows/install-policy.wxi:38: <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder" Value="[%ProgramW6432]\ArtCraft\VectorZ\" After="CraftRestoreUserFolder" Sequence="ui" Condit
+packaging/windows/install-policy.wxi:39: <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultUserFolder" Value="[LocalAppDataFolder]Programs\ArtCraft\VectorZ\" After="CraftDefaultMachineFolder" Sequenc
+packaging/windows/install-policy.wxi:49: <Control Id="Info" Type="Text" X="20" Y="50" Width="330" Height="30" Text="{\CraftScopeText}An update keeps the existing folder. New copies use the ArtCraft fol
+packaging/windows/check-install-policy.ps1:58: if ($dirs['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or $dirs['CraftSuiteFolder'][1] -ne 'ArtCraft' -or
+packaging/windows/check-install-policy.ps1:60: throw 'Launcher new-install folder must be under the per-user ArtCraft suite root.'
+packaging/windows/check-install-policy.ps1:91: $directories['CraftSuiteFolder'][1] -ne 'ArtCraft') { throw 'Expected the app under the ArtCraft suite folder.' }
+packaging/windows/check-install-policy.ps1:165: $machineFolder = (Join-Path $machineRoot "ArtCraft\$($policy.name)") + '\'
+packaging/windows/check-install-policy.ps1:175: $wanted = if ($scope -eq '1') { $machineFolder } else { (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\$($policy.name)") + '\' }
+packaging/windows/check-install-policy.ps1:182: $userDefault = (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\$($policy.name)") + '\'
+packaging/linux/flatpak/com.pintaz.vectorz.bundle.yml:20: - --filesystem=xdg-data/ArtCraft/versions:ro
+packaging/linux/flatpak/com.pintaz.vectorz.yml:20: - --filesystem=xdg-data/ArtCraft/versions:ro
