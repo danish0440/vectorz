@@ -13,6 +13,8 @@ vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
 vectorz-effects = { workspace = true }
+# The editing data for other apps writes clipped art cut to its clipping path.
+vectorz-pathops = { workspace = true }
 vectorz-brush = { workspace = true }
 vectorz-text = { workspace = true }
 # Windows metafile previews, opened when a file's PostScript can't be read.
@@ -29,8 +31,11 @@ ruzstd = { workspace = true }
 hayro-ccitt = { workspace = true }
 # Live effects' params, as the art styles that name them give them.
 serde_json = { workspace = true }
+# Substring search for PostScript `search`.
+memchr = { workspace = true }
 
 [dev-dependencies]
 vectorz-testkit = { workspace = true }
+vectorz-text = { workspace = true, features = ["test-fonts"] }
 # Tests: a Group 4 encoder and the T.4 run codes, to write CCITT test images.
 fax = "0.2"
