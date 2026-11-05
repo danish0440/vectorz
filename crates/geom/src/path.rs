@@ -180,9 +180,58 @@ fn is_collinear(p: Point, a: Point, b: Point) -> bool {
     cross.abs() <= 1e-6 * va.hypot().max(1.0) * vb.hypot().max(1.0) && va.dot(vb) < 0.0
 }
 
+/// Most anchors [`with_anchor_budget`] lets paths read together: 32M (about 1.5 GB), 4M in the web
+/// build.
+pub const MAX_READ_ANCHORS: usize = if cfg!(target_arch = "wasm32") { 4 << 20 } else { 32 << 20 };
+
+std::thread_local! {
+    /// Anchors the paths being read on this thread may still have ([`with_anchor_budget`]).
+    static ANCHORS_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` (which reads paths with serde) letting the paths it reads have at most `max` anchors
+/// together; reading more fails. A compressed file of repeated anchors stays small while its paths
+/// take gigabytes once read, past what the web build can address.
+pub fn with_anchor_budget<T>(max: usize, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ANCHORS_LEFT.set(self.0);
+        }
+    }
+    let _restore = Restore(ANCHORS_LEFT.replace(Some(max)));
+    f()
+}
+
+/// A subpath's anchors read within [`with_anchor_budget`].
+fn anchors_within<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Anchor>, D::Error> {
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Vec<Anchor>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of anchors")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut a: A) -> Result<Vec<Anchor>, A::Error> {
+            let mut out = Vec::new();
+            while let Some(anchor) = a.next_element::<Anchor>()? {
+                if let Some(left) = ANCHORS_LEFT.get() {
+                    let left = left
+                        .checked_sub(1)
+                        .ok_or_else(|| serde::de::Error::custom(format!("the paths have more than {MAX_READ_ANCHORS} anchors")))?;
+                    ANCHORS_LEFT.set(Some(left));
+                }
+                out.push(anchor);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_seq(V)
+}
+
 /// An open or closed run of anchors.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubPath {
+    #[serde(deserialize_with = "anchors_within")]
     pub anchors: Vec<Anchor>,
     #[serde(default)]
     pub closed: bool,
@@ -229,7 +278,7 @@ impl SubPath {
         }
         let mut pos = vec![0.0];
         for i in 0..self.segment_count() {
-            let len = kurbo::ParamCurveArclen::arclen(&self.segment(i), 1e-3);
+            let len = measured_arclen(&PathSeg::Cubic(self.segment(i)), 1e-3);
             pos.push(pos.last().copied().unwrap_or(0.0) + len);
         }
         pos
@@ -531,17 +580,43 @@ impl PathData {
     pub fn is_closed(&self) -> bool {
         !self.subpaths.is_empty() && self.subpaths.iter().all(|s| s.closed)
     }
-    /// Nearest point on any segment: (subpath, segment, t, point, distance).
+    /// Nearest point on any segment: (subpath, segment, t, point, distance). Of segments at the
+    /// same distance, the first one wins.
+    ///
+    /// `p` is first projected onto a segment that starts or ends at the anchor nearest to it. A
+    /// segment whose control-point box lies farther from `p` than that distance, or than the nearest
+    /// point found so far, is then skipped without projecting `p` onto it. A segment is never
+    /// skipped when `p` or one of its control points is past [`NEAREST_SKIP_LIMIT`] in x or y, or
+    /// not finite.
     pub fn nearest(&self, p: Point) -> Option<(usize, usize, f64, Point, f64)> {
+        // Segment `seg` of `sp`, as `SubPath::segment` builds it, without its remainder operations.
+        let segment = |sp: &SubPath, seg: usize| {
+            let (a, b) = (&sp.anchors[seg], &sp.anchors[if seg + 1 == sp.anchors.len() { 0 } else { seg + 1 }]);
+            CubicBez::new(a.p, a.h_out, b.h_in, b.p)
+        };
+        let mut seed: Option<(f64, CubicBez)> = None;
+        for sp in self.subpaths.iter().filter(|sp| sp.segment_count() > 0) {
+            for (k, a) in sp.anchors.iter().enumerate() {
+                let d = (a.p - p).hypot2();
+                if seed.is_none_or(|s| d < s.0) {
+                    seed = Some((d, segment(sp, k.min(sp.segment_count() - 1))));
+                }
+            }
+        }
+        let mut bound = seed.map_or(f64::INFINITY, |(_, c)| c.nearest(p, 1e-6).distance_sq.sqrt());
         let mut best: Option<(usize, usize, f64, Point, f64)> = None;
         for (si, sp) in self.subpaths.iter().enumerate() {
             for seg in 0..sp.segment_count() {
-                let c = sp.segment(seg);
+                if box_gap(&segment(sp, seg), p).is_some_and(|g| g > bound) {
+                    continue;
+                }
+                let c = segment(sp, seg);
                 let n = c.nearest(p, 1e-6);
                 let q = c.eval(n.t);
                 let d = n.distance_sq.sqrt();
                 if best.is_none_or(|b| d < b.4) {
                     best = Some((si, seg, n.t, q, d));
+                    bound = bound.min(d);
                 }
             }
         }
@@ -561,8 +636,46 @@ impl PathData {
     }
     /// Total length of all segments.
     pub fn length(&self) -> f64 {
-        self.to_bezpath().segments().map(|s| kurbo::ParamCurveArclen::arclen(&s, 1e-6)).sum()
+        self.to_bezpath().segments().map(|s| measured_arclen(&s, 1e-6)).sum()
     }
+}
+
+/// The largest x or y, in size, of a point and a segment's control points for which
+/// [`PathData::nearest`] may skip the segment without projecting the point onto it.
+const NEAREST_SKIP_LIMIT: f64 = 1e100;
+
+/// The distance from `p` to the box of `c`'s control points, which holds every point of the
+/// segment, less a rounding margin, so that no point of the segment is nearer to `p`. None when `p`
+/// or a control point is past [`NEAREST_SKIP_LIMIT`] in x or y, or not finite.
+fn box_gap(c: &CubicBez, p: Point) -> Option<f64> {
+    let xs = [c.p0.x, c.p1.x, c.p2.x, c.p3.x];
+    let ys = [c.p0.y, c.p1.y, c.p2.y, c.p3.y];
+    if !xs.iter().chain(&ys).chain(&[p.x, p.y]).all(|v| v.abs() <= NEAREST_SKIP_LIMIT) {
+        return None;
+    }
+    let (x0, x1) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let (y0, y1) = (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let margin = [x0, x1, y0, y1, p.x, p.y].iter().fold(1.0f64, |m, v| m.max(v.abs())) * 1e-9;
+    let dx = ((x0 - p.x).max(p.x - x1) - margin).max(0.0);
+    let dy = ((y0 - p.y).max(p.y - y1) - margin).max(0.0);
+    Some(dx.hypot(dy))
+}
+
+/// The largest x or y, in size, of a segment's control points for which its length is measured.
+/// Document coordinates are far inside it; past it (or not finite) the integrator's arithmetic
+/// overflows and it subdivides without end.
+const MEASURE_LIMIT: f64 = 1e9;
+
+/// The length of `seg` to `accuracy`; 0 for a segment whose control points are not finite or past
+/// [`MEASURE_LIMIT`].
+pub fn measured_arclen(seg: &PathSeg, accuracy: f64) -> f64 {
+    let ok = |p: Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= MEASURE_LIMIT && p.y.abs() <= MEASURE_LIMIT;
+    let fits = match seg {
+        PathSeg::Line(l) => ok(l.p0) && ok(l.p1),
+        PathSeg::Quad(q) => ok(q.p0) && ok(q.p1) && ok(q.p2),
+        PathSeg::Cubic(c) => ok(c.p0) && ok(c.p1) && ok(c.p2) && ok(c.p3),
+    };
+    if fits { kurbo::ParamCurveArclen::arclen(seg, accuracy) } else { 0.0 }
 }
 
 /// The largest x or y, in size, of a segment's control points for which [`segment_bounds`]
@@ -685,6 +798,102 @@ mod tests {
         assert!((d - 3.0).abs() < 1e-6);
     }
 
+    /// [`PathData::nearest`] without skipping any segment: every segment projected, the first of
+    /// equal distances kept.
+    fn nearest_exhaustive(pd: &PathData, p: Point) -> Option<(usize, usize, f64, Point, f64)> {
+        let mut best: Option<(usize, usize, f64, Point, f64)> = None;
+        for (si, sp) in pd.subpaths.iter().enumerate() {
+            for seg in 0..sp.segment_count() {
+                let c = sp.segment(seg);
+                let n = c.nearest(p, 1e-6);
+                let d = n.distance_sq.sqrt();
+                if best.is_none_or(|b| d < b.4) {
+                    best = Some((si, seg, n.t, c.eval(n.t), d));
+                }
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn nearest_matches_every_segment_projected() {
+        // A fixed linear congruential sequence, so each run tests the same paths and points.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |n: u64| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % n
+        };
+        let mut compared = 0;
+        for _ in 0..400 {
+            // Anchors and handles on a coarse grid, so that many points are equally near two
+            // segments and the first of them has to win.
+            let subpaths = (0..next(4))
+                .map(|_| {
+                    let anchors = (0..next(9))
+                        .map(|_| {
+                            let p = Point::new(next(9) as f64 * 5.0, next(9) as f64 * 5.0);
+                            if next(3) == 0 {
+                                let h = |v: u64| (v as f64 - 3.0) * 5.0;
+                                Anchor::with_handles(p, p + kurbo::Vec2::new(h(next(7)), h(next(7))), p + kurbo::Vec2::new(h(next(7)), h(next(7))))
+                            } else {
+                                Anchor::corner(p)
+                            }
+                        })
+                        .collect();
+                    SubPath::new(anchors, next(2) == 0)
+                })
+                .collect();
+            let pd = PathData { subpaths };
+            for _ in 0..30 {
+                let p = Point::new(next(101) as f64 * 0.5 - 5.0, next(101) as f64 * 0.5 - 5.0);
+                assert_eq!(pd.nearest(p), nearest_exhaustive(&pd, p), "{pd:?} at {p:?}");
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 12_000);
+    }
+
+    #[test]
+    fn nearest_on_open_closed_compound_one_anchor_and_empty_paths() {
+        let pts = [Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0), Point::new(0.0, 10.0)];
+        let open = PathData::single(SubPath::polyline(&pts, false));
+        let closed = square();
+        let mut compound = square();
+        compound.subpaths.push(SubPath::polyline(&[Point::new(20.0, 0.0), Point::new(30.0, 0.0)], false));
+        let one = PathData::single(SubPath::new(vec![Anchor::corner(Point::new(5.0, 5.0))], true));
+        let empty = PathData::default();
+        let probes = [Point::new(5.0, 5.0), Point::new(-2.0, 5.0), Point::new(25.0, 1.0), Point::new(10.0, 10.0), Point::new(1e6, -1e6)];
+        for pd in [&open, &closed, &compound, &one, &empty] {
+            for p in probes {
+                assert_eq!(pd.nearest(p), nearest_exhaustive(pd, p), "{pd:?} at {p:?}");
+            }
+        }
+        // The center of the square is 5 from every side, and the first side wins.
+        assert_eq!(closed.nearest(Point::new(5.0, 5.0)).map(|n| (n.0, n.1, n.4)), Some((0, 0, 5.0)));
+        // The closing side of the closed square is nearer than the open path's segments.
+        assert_eq!(closed.nearest(Point::new(-2.0, 5.0)).map(|n| (n.1, n.4)), Some((3, 2.0)));
+        assert_eq!(open.nearest(Point::new(-2.0, 5.0)).map(|n| n.1), Some(0));
+        assert_eq!(compound.nearest(Point::new(25.0, 1.0)).map(|n| (n.0, n.1, n.4)), Some((1, 0, 1.0)));
+        assert_eq!(one.nearest(Point::new(5.0, 5.0)), None);
+        assert_eq!(empty.nearest(Point::new(5.0, 5.0)), None);
+    }
+
+    #[test]
+    fn nearest_with_huge_or_non_finite_coordinates_matches_every_segment_projected() {
+        let far = [1e200, -1e300, f64::INFINITY, f64::NAN];
+        for v in far {
+            // A far segment first, then the segments with the huge coordinate, then nearer ones.
+            let mut pd = PathData::single(SubPath::polyline(&[Point::new(100.0, 100.0), Point::new(110.0, 100.0)], false));
+            pd.subpaths.push(SubPath::polyline(&[Point::new(20.0, 0.0), Point::new(v, 5.0), Point::new(30.0, 0.0)], false));
+            pd.subpaths.extend(square().subpaths);
+            pd.subpaths.push(SubPath::polyline(&[Point::new(40.0, 0.0), Point::new(50.0, 0.0)], false));
+            for p in [Point::new(5.0, -1.0), Point::new(45.0, 1.0), Point::new(25.0, 0.0), Point::new(v, 0.0), Point::new(1e150, 1e150)] {
+                // Debug output, so that a NaN distance compares equal to itself.
+                assert_eq!(format!("{:?}", pd.nearest(p)), format!("{:?}", nearest_exhaustive(&pd, p)), "{v} at {p:?}");
+            }
+        }
+    }
+
     #[test]
     fn reverse_flips_area_sign() {
         let mut p = square();
@@ -770,6 +979,13 @@ mod tests {
         assert_eq!(a.kind, AnchorKind::Smooth);
         let c = Anchor::with_handles(Point::new(0.0, 0.0), Point::new(-1.0, 0.0), Point::new(0.0, 2.0));
         assert_eq!(c.kind, AnchorKind::Corner);
+    }
+
+    /// Handles too large to measure give the curve no length instead of subdividing it without end.
+    #[test]
+    fn anchor_positions_of_an_unmeasurable_curve_are_finite() {
+        let p = curve(Point::new(100.0, 1e300), Point::new(300.0, -1e300));
+        assert_eq!(p.subpaths[0].anchor_arc_positions(), [0.0, 0.0]);
     }
 
     #[test]

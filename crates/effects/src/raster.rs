@@ -9,7 +9,7 @@ use vectorz_geom::{Point, Rect};
 
 use crate::merged_params;
 use crate::pixel::{self, PixelFx, PixelSpace};
-use crate::util::*;
+use crate::util::{flag, num, text};
 
 /// Effect › Rasterize's id.
 pub const RASTERIZE: &str = "rasterize";
@@ -366,7 +366,7 @@ pub fn blend_mode(s: &str) -> BlendMode {
 }
 
 /// An effect's `color` parameter (`"#rrggbb"`, `[r, g, b]` 0..1 or a colour object).
-pub(crate) fn color_param(p: &Value, default: Color) -> Color {
+pub fn color_param(p: &Value, default: Color) -> Color {
     match p.get("color") {
         Some(Value::String(s)) => Color::from_hex(s).unwrap_or(default),
         Some(Value::Array(a)) if a.len() >= 3 => {
