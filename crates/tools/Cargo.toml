@@ -12,6 +12,7 @@ workspace = true
 vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
+vectorz-brush = { workspace = true }
 vectorz-pathops = { workspace = true }
 vectorz-effects = { workspace = true }
 vectorz-text = { workspace = true }
