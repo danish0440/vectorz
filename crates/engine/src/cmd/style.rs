@@ -20,7 +20,7 @@ use vectorz_color::Paint;
 use vectorz_doc::{Appearance, DEFAULT_GRAPHIC_STYLE, Document, GraphicStyle, Node, NodeId, NodeKind};
 use vectorz_geom::Rect;
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, bool_or, cmd, has_doc, index, object_param, ok, str_param, unique_name};
 use crate::EngineError;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -290,7 +290,7 @@ fn style_index(d: &Document, name: &str) -> Result<usize> {
 
 /// The object a style is made from: `id`, else the first selected object.
 fn source<'a>(s: &'a Session, p: &Value, cmd: &str) -> Result<(NodeId, &'a Node)> {
-    let id = match id_param(p, "id") {
+    let id = match object_param(p, "id", cmd)? {
         Some(id) => id,
         None => super::edit::selected_roots(s)?.first().copied().ok_or_else(|| bad(cmd, "select an object (or pass `id`)"))?,
     };
@@ -547,7 +547,7 @@ fn style_move(s: &mut Session, p: &Value) -> Result<Value> {
     let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "missing `to` (an index)"))?;
     let d = &s.doc()?.doc;
     let from = style_index(d, name)?;
-    let to = (to as usize).min(d.graphic_styles.len() - 1);
+    let to = index(to).min(d.graphic_styles.len() - 1);
     if from == to {
         return ok();
     }

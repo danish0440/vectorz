@@ -3,10 +3,12 @@
 //! A plug-in is a WebAssembly module that implements the VectorZ plug-in ABI (v1, documented
 //! in `docs/plugins.md`). It runs in [`wasmi`], a pure-Rust interpreter, with:
 //!
-//! - **no host imports**: no WASI, file system, network, clock or randomness. A module that
-//!   imports anything is rejected;
+//! - **no host imports but the three of API level 2** ([`host`]: progress, Cancel and log lines,
+//!   with the `progress` permission): no WASI, file system, network, clock or randomness. A module
+//!   that imports anything else is rejected;
 //! - an **instruction budget** (fuel) per call, metered in slices so a wall-clock deadline is
-//!   also enforced (native builds), so infinite loops end with an error;
+//!   also enforced (native builds), so infinite loops end with an error. A filter may ask for a
+//!   larger one ([`Budget::Heavy`]), which the host lets the user allow before installing it;
 //! - a **linear-memory cap**, a **recursion-depth cap** and wasmi's strict module limits;
 //! - a **fresh instance per run**, so no state leaks between calls.
 //!
@@ -17,19 +19,32 @@
 //! their geometry, fills, strokes (gradients included) and opacity. An **object filter** returns
 //! the objects to keep, change or add, applied to the document as one edit
 //! ([`objects::apply_output`]); a **live effect** ([`effect`]) rewrites one object's geometry each
-//! time it is drawn, from an appearance stack. The process-wide [`registry`] holds the installed
-//! plug-ins.
+//! time it is drawn, from an appearance stack; an **exporter** ([`export`]) writes the whole
+//! document in a file format of its own. The process-wide [`registry`] holds the installed
+//! plug-ins. A plug-in's parameters ([`manifest`]) come with what the host's dialogs need to show
+//! them well: labels, units, groups, help and conditions ([`dialog`]). What a plug-in may do is
+//! the set of [`permissions`] its manifest lists, which the user approves when it is installed.
 #![forbid(unsafe_code)]
 
+pub mod dialog;
 pub mod effect;
+pub mod export;
+pub mod host;
 pub mod manifest;
 pub mod objects;
+pub mod permissions;
 pub mod registry;
 mod runtime;
 pub mod wat;
 
-pub use manifest::{Kind, Manifest, ParamSpec};
-pub use runtime::{ABI_VERSION, Limits, Plugin};
+pub use dialog::ParamUi;
+pub use host::{LogLevel, LogLine, Report};
+pub use manifest::{Budget, Kind, Manifest, Param, ParamSpec};
+pub use runtime::{ABI_VERSION, HEAVY_FUEL, HEAVY_WALL_TIME_MS, Limits, Plugin, heavy_terms};
+
+/// What the host puts before a plug-in's id to name what it adds: its live effect
+/// (`plugin.<id>`, [`effect`]) or its file format ([`export`]).
+pub const PREFIX: &str = "plugin.";
 
 /// A plug-in error. Every way a module can misbehave ends here, never in a panic.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -52,6 +67,10 @@ pub enum Error {
     Failed(String),
     #[error("no plug-in {0:?} is installed")]
     NotFound(String),
+    /// The caller asked the run to stop ([`vectorz_doc::cancel`]), between two slices of
+    /// its instruction budget.
+    #[error("cancelled")]
+    Cancelled,
     #[error("{0}")]
     Io(String),
 }
