@@ -7,6 +7,7 @@ use vectorz_engine::file_access::{self, AutomationRoots};
 use vectorz_engine::{Session, UiRequest, ViewInfo};
 use vectorz_geom::Point;
 use vectorz_render::Renderer;
+use vectorz_render::encode::{RasterExportOptions, RasterFormat};
 use vectorz_tools::{Mods, PointerEvent, PointerKind, TOOL_GROUPS, ToolKey};
 
 use crate::backend::Backend;
@@ -41,7 +42,7 @@ const HOST_COMMANDS: &[(&str, &str, &str)] = &[
     (
         "file.exportForScreens",
         "Export for Screens…",
-        "{folder?, zip?, artboards? | range? | fullDocument? | assets?, includeBleed?, subfolders?, preset?, formats?, settings?, prefix?} = document.exportForScreens (no folder → the files, or one zip, as dataBase64)",
+        "{folder?, zip?, artboards? | range? | fullDocument? | assets?, includeBleed?, includeArtboardFill?, subfolders?, preset?, formats?, settings?, prefix?} = document.exportForScreens (no folder → the files, or one zip, as dataBase64)",
     ),
     ("tool.select", "Select Tool", "{tool} e.g. selection, directSelection, pen, rectangle, ellipse, polygon, star, lineSegment"),
     (
@@ -168,6 +169,12 @@ impl Headless {
                 }
                 UiRequest::Dialog(k, p) => out.push(json!({"dialog": k, "params": p})),
                 UiRequest::Status(msg) => out.push(json!({"status": msg})),
+                // The place cursor's file, placed at once.
+                UiRequest::Place(p) => {
+                    self.session.execute("file.place", &p).map_err(|e| e.to_string())?;
+                }
+                // The host keeps its view's artboard on a press, as for the presses it hands over.
+                UiRequest::HeldPress { .. } => {}
             }
         }
         Ok(())
@@ -176,9 +183,11 @@ impl Headless {
     fn pointer(&mut self, p: &Value) -> Result<Value, String> {
         let events = p.get("events").and_then(Value::as_array).ok_or("missing `events`")?;
         let base: Mods = p.get("mods").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
+        let default = PointerEvent::json_backquote(p, false)?;
+        let held = events.iter().map(|e| PointerEvent::json_backquote(e, default)).collect::<Result<Vec<_>, _>>()?;
         self.ensure_document();
         let mut requests = vec![];
-        for e in events {
+        for (e, backquote) in events.iter().zip(held) {
             let kind = s(e, "kind").unwrap_or("");
             let kind = pointer_kind(kind).ok_or_else(|| format!("unknown pointer kind `{kind}` (down|drag|up|move|doubleclick)"))?;
             if s(e, "space") == Some("screen") {
@@ -187,9 +196,22 @@ impl Headless {
             let x = e.get("x").and_then(Value::as_f64).ok_or("pointer event needs numeric `x`")?;
             let y = e.get("y").and_then(Value::as_f64).ok_or("pointer event needs numeric `y`")?;
             let mods = e.get("mods").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or(base);
-            let ev = PointerEvent { kind, pos: Point::new(x, y), mods, pressure: PointerEvent::json_pressure(e) };
+            let ev = PointerEvent {
+                kind,
+                pos: Point::new(x, y),
+                mods,
+                backquote,
+                pressure: PointerEvent::json_pressure(e),
+                pen: PointerEvent::json_pen(e),
+            };
             let reqs = self.session.pointer(&ev, self.view).map_err(|e| e.to_string())?;
             self.apply_ui_requests(reqs, &mut requests)?;
+            // With no frames to show the highlight or apply an edit in later, each event waits for
+            // the work the tool runs on another thread (a hover's map, a release's merge).
+            if self.session.tool_waiting() {
+                let reqs = self.session.tool_poll(self.view, true).map_err(|e| e.to_string())?;
+                self.apply_ui_requests(reqs, &mut requests)?;
+            }
             let hold = PointerEvent::json_hold(e);
             if hold > 0.0 {
                 let reqs = self.session.tool_tick(hold, self.view).map_err(|e| e.to_string())?;
@@ -252,7 +274,11 @@ impl Headless {
         let r = doc.artboards.get(idx).map(|a| a.rect).ok_or("no such artboard")?;
         let scale = p.get("scale").and_then(Value::as_f64).unwrap_or(1.0).clamp(0.01, 16.0);
         vectorz_render::raster_size(r, scale)?;
-        let img = self.renderer.render_region(&doc, r, scale, true);
+        // Rendered with the options of a PNG export on white, so its pixels are the exported file's.
+        // `traceViews: true` draws Image Trace objects as their View shows them, as the canvas does.
+        let mut opts = RasterExportOptions { background: Some([255; 3]), ..Default::default() }.render_options(RasterFormat::Png);
+        opts.trace_views = p.get("traceViews").and_then(Value::as_bool) == Some(true);
+        let img = self.renderer.render_region_with(&doc, r, scale, &opts);
         // A cancelled render stops drawing: the picture is not whole and is not written.
         vectorz_engine::cancel::check().map_err(|e| e.to_string())?;
         let png = img.to_png()?;
@@ -272,10 +298,18 @@ impl Headless {
         Ok(out)
     }
 
-    /// `app.open {path}`: any readable file as a new active document (`document.open`).
+    /// `app.open {path, importer?, params?}`: any readable file as a new active document
+    /// (`document.open`, with the importer plug-in `importer` names and its parameters `params`).
     pub fn open(&mut self, p: &Value) -> Result<Value, String> {
         let path = s(p, "path").ok_or("missing `path`")?;
-        self.session.execute("document.open", &json!({"path": path})).map_err(|e| e.to_string())
+        let mut params = json!({"path": path});
+        for k in ["importer", "params"] {
+            if let Some(v) = p.get(k).filter(|v| !v.is_null()) {
+                params[k] = v.clone();
+            }
+        }
+        let roots = self.roots.clone();
+        file_access::confine(roots.as_ref(), || self.session.execute("document.open", &params)).map_err(|e| e.to_string())
     }
 
     /// `app.save {path?, format?, options?}`: `document.save` (by default the document's own path and
@@ -285,12 +319,16 @@ impl Headless {
         if s(p, "path").is_none() && st.path.is_none() {
             return Err("missing `path` (document was never saved)".into());
         }
-        self.session.execute("document.save", p).map_err(|e| e.to_string())
+        let roots = self.roots.clone();
+        file_access::confine(roots.as_ref(), || self.session.execute("document.save", p)).map_err(|e| e.to_string())
     }
 
     /// `app.export {path?, format?, …}`: `document.export` (format defaults to the path's extension).
     pub fn export(&mut self, p: &Value) -> Result<Value, String> {
-        self.session.execute("document.export", p).map_err(|e| e.to_string())
+        // The key check of `document.export` runs before the file is written.
+        self.session.check_params("document.export", p).map_err(|e| e.to_string())?;
+        let roots = self.roots.clone();
+        file_access::confine(roots.as_ref(), || self.session.execute("document.export", p)).map_err(|e| e.to_string())
     }
 }
 
@@ -326,7 +364,10 @@ impl Headless {
             "document.node" => self.exec("document.node", p),
             "document.json" => self.exec("document.json", &json!({})),
             "ui.tool.select" => self.select_tool(p),
-            "ui.tool.list" => Ok(serde_json::to_value(TOOL_GROUPS).unwrap_or_default()),
+            "ui.tool.list" => {
+                let groups: Vec<_> = TOOL_GROUPS.iter().chain(vectorz_tools::addons::GROUPS).copied().collect();
+                Ok(serde_json::to_value(groups).unwrap_or_default())
+            }
             "ui.pointer" => self.pointer(p),
             "ui.key" => self.key(p),
             "ui.render" | "ui.screenshot" => self.render(p),

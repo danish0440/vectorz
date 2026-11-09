@@ -47,7 +47,7 @@ pub static TEMPLATES: &[Template] = &[
         uri: "vectorz://object/{id}",
         name: "object",
         title: "One layer or object",
-        description: "The layer or object with this id, with its children, bounds and paint (document.node {summary: true}). Large containers can be sliced with run_command document.node {id, summary, depth, childLimit}: truncated levels report childCount",
+        description: "The layer or object with this id, with its children, bounds and paint (document.node {summary: true}; `opacity` is a 0–1 fraction, `opacityPct` the 0–100 % the drawing tools take). Large containers can be sliced with run_command document.node {id, summary, depth, childLimit}: truncated levels report childCount",
         mime: "application/json",
         live: Live::Objects,
     },
@@ -166,6 +166,8 @@ fn decode(s: &str) -> String {
     while let Some(b) = bytes.get(i).copied() {
         if b == b'%'
             && i + 2 < bytes.len()
+            && let Some(digits) = bytes.get(i + 1..i + 3)
+            && digits.iter().all(u8::is_ascii_hexdigit)
             && let Ok(byte) = u8::from_str_radix(s.get(i + 1..i + 3).unwrap_or(""), 16)
         {
             out.push(byte);
@@ -186,6 +188,10 @@ fn decode(s: &str) -> String {
 /// caller turns it into `-32602`); other failures (no document, an unreachable app) stay
 /// backend errors.
 fn read_object(b: &mut dyn Backend, id: &str) -> Result<Option<Value>, String> {
+    // `parse` alone would accept a leading `+`.
+    if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
+        return Ok(None);
+    }
     let Ok(id) = id.parse::<u64>() else { return Ok(None) };
     match b.call("engine.execute", json!({"command": "document.node", "params": {"id": id, "summary": true}})) {
         Ok(v) => Ok(Some(v)),
@@ -210,6 +216,15 @@ const MAX_CATALOGUE: usize = 20_000;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_only_accepts_two_hex_digits() {
+        assert_eq!(decode("a%+1b"), "a%+1b");
+        assert_eq!(decode("a%-1b"), "a%-1b");
+        assert_eq!(decode("a%+Fb"), "a%+Fb");
+        assert_eq!(decode("a%4"), "a%4");
+        assert_eq!(decode("Brand%2040%25"), "Brand 40%");
+    }
 
     #[test]
     fn variables_are_split_out_and_decoded() {
@@ -255,6 +270,17 @@ mod tests {
         }
         let mut empty = Box::new(crate::Headless::new());
         assert!(matches!(read(empty.as_mut(), "vectorz://object/1"), Err(ReadError::Backend(_))));
+    }
+
+    #[test]
+    fn object_id_must_be_plain_digits() {
+        let mut b = Box::new(crate::Headless::with_document());
+        let made = b.call("engine.execute", json!({"command": "shape.rectangle", "params": {"x": 10, "y": 10, "width": 50, "height": 40}})).unwrap();
+        let id = made["id"].as_i64().expect("shape.rectangle returns an integer id");
+        for uri in [format!("vectorz://object/+{id}"), format!("vectorz://object/-{id}")] {
+            assert!(matches!(read(b.as_mut(), &uri), Err(ReadError::Invalid(_))), "{uri}");
+        }
+        assert!(read(b.as_mut(), &format!("vectorz://object/{id}")).is_ok());
     }
 
     #[test]
