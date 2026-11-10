@@ -19,6 +19,7 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
     ok: Some("OK"),
     min_width: 380.0,
     max_width: Some(560.0),
+    inputs: |_| &["path", "showCode"],
     ..DialogSpec::FORM
 };
 
@@ -92,7 +93,7 @@ pub fn open(app: &mut VectorzApp, mode: Mode, path: Option<&str>) {
         .session
         .active()
         .filter(|st| mode != Mode::Export && matches!(st.format, "svg" | "svgz"))
-        .map(|st| Value::Object(st.save_options.clone()));
+        .map(|st| Value::Object(vectorz_engine::cmd::fileio::remembered_save_options(st)));
     for last in [&app.ui.svg_options].into_iter().chain(saved.as_ref()) {
         if let Some(o) = last.as_object() {
             fields.extend(o.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -111,7 +112,8 @@ pub fn open(app: &mut VectorzApp, mode: Mode, path: Option<&str>) {
 /// only when saving).
 fn options(d: &Dialog) -> Value {
     let mode = Mode::of(d);
-    let mut o: Map<String, Value> = d.fields.iter().filter(|(k, _)| !UI_KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut o: Map<String, Value> =
+        d.fields.iter().filter(|(k, _)| !UI_KEYS.contains(&k.as_str()) && !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
     if mode == Mode::Export {
         o.remove("preserveEditing");
         if d.bool("useArtboards") {
@@ -244,7 +246,7 @@ fn artboards(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 d.fields.insert("allArtboards".into(), json!(false));
             }
             let mut range = d.str("range");
-            let edit = egui::TextEdit::singleline(&mut range).hint_text(format!("1-{count}")).desired_width(90.0);
+            let edit = egui::TextEdit::singleline(&mut range).align(egui::Align2::LEFT_CENTER).hint_text(format!("1-{count}")).desired_width(90.0);
             if ui.add_enabled(!all, edit).changed() {
                 d.fields.insert("range".into(), json!(range));
             }
@@ -266,8 +268,8 @@ fn code_view(app: &VectorzApp, ui: &mut egui::Ui, d: &Dialog) {
         o.insert("artboard".into(), json!(first.map_or(0, |n| n.saturating_sub(1))));
     }
     // One cached text, replaced when the document or the options change.
-    let key = egui::Id::new("svg-code");
-    let sig = egui::Id::new((st.uid, st.revision, opts.to_string())).value();
+    let key = egui::Id::unique("svg-code");
+    let sig = egui::Id::unique((st.uid, st.revision, opts.to_string())).value();
     let code: Arc<String> = match ui.ctx().data(|m| m.get_temp::<(u64, Arc<String>)>(key)).filter(|(s, _)| *s == sig) {
         Some((_, c)) => c,
         None => {
@@ -378,6 +380,19 @@ mod tests {
         assert_eq!(app.ui.dialog.as_ref().unwrap().f64("decimals", 0.0), 1.0);
     }
 
+    /// A dialog a save panel opened carries the dialog layer's own `__` fields; the save is given
+    /// only the SVG options, so it is not refused for an unknown key.
+    #[test]
+    fn save_as_svg_from_a_save_panel_passes_only_the_options() {
+        let (mut app, written) = app("/tmp/panel.svg");
+        app.run("file.saveAs", Value::Null).unwrap();
+        app.ui.dialog.as_mut().unwrap().fields.insert(crate::dialogs::AFTER_PANEL.into(), json!(true));
+        assert!(options(app.ui.dialog.as_ref().unwrap()).get(crate::dialogs::AFTER_PANEL).is_none());
+        let d = app.ui.dialog.take().unwrap();
+        confirm(&mut app, &d).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(written.borrow()[0].0, "/tmp/panel.svg");
+    }
+
     #[test]
     fn all_artboards_export_one_file_each() {
         let (mut app, written) = app("/tmp/set.svg");
@@ -406,7 +421,7 @@ mod tests {
         app.run("file.save", Value::Null).unwrap();
         assert!(app.ui.dialog.is_none());
         assert_eq!(written.borrow()[1].0, "/tmp/doc.svg");
-        assert!(text(&written, 1).contains("style=\"fill:") && text(&written, 1).matches("<path").count() == 2);
+        assert!(text(&written, 1).contains("style=\"fill:") && vectorz_testkit::svg_shapes(&text(&written, 1)) == 2);
         // Save a Copy (options given) leaves the document's path alone.
         app.run("file.saveCopy", json!({"path": "/tmp/copy.svg", "svg": {"minify": true}})).unwrap();
         assert!(!text(&written, 2).trim_end().contains('\n') && !text(&written, 2).contains("<?xml"), "minified");
@@ -414,6 +429,18 @@ mod tests {
         // A native Save As needs no options.
         app.run("file.saveAs", json!({"path": "/tmp/doc.vectorz"})).unwrap();
         assert!(vectorz_format::sniff(&written.borrow()[3].1));
+    }
+
+    #[test]
+    fn save_as_svg_leaves_out_a_remembered_artboard_the_document_no_longer_has() {
+        let (mut app, written) = app("/tmp/doc.svg");
+        app.run("file.saveAs", json!({"path": "/tmp/doc.svg", "svg": {"artboard": 1}})).unwrap();
+        assert_eq!(app.session.active().unwrap().save_options["artboard"], 1);
+        app.run("artboard.delete", json!({"index": 1})).unwrap();
+        app.run("file.saveAs", Value::Null).unwrap();
+        assert!(app.ui.dialog.as_ref().unwrap().fields.get("artboard").is_none());
+        super::super::confirm(&mut app).unwrap();
+        assert_eq!((written.borrow().len(), written.borrow()[1].0.as_str()), (2, "/tmp/doc.svg"));
     }
 
     #[test]

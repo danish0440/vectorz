@@ -173,7 +173,7 @@ proptest! {
         let root = base.join("a/b/c/root");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(base.join("outside")).unwrap();
-        let roots = vectorz_engine::file_access::AutomationRoots::new(Some(root.as_path()), Some(root.as_path())).unwrap();
+        let roots = vectorz_engine::file_access::AutomationRoots::new(&[root.as_path()], &[root.as_path()]).unwrap();
         let mut s = Server::new(Box::new(Headless::with_document().with_automation_roots(roots)));
         let path = format!("{}{}{tail}", root.display(), std::path::MAIN_SEPARATOR);
         let r = catch_quiet(|| call(&mut s, tool, json!({"path": path})));
@@ -290,8 +290,16 @@ fn resources_are_json() {
     let list = rpc(&mut s, 2, "resources/list", json!({}));
     for r in list["result"]["resources"].as_array().unwrap() {
         let v = rpc(&mut s, 3, "resources/read", json!({"uri": r["uri"]}));
-        let text = v["result"]["contents"][0]["text"].as_str().unwrap();
-        serde_json::from_str::<Value>(text).unwrap();
+        let content = &v["result"]["contents"][0];
+        assert_eq!(content["mimeType"], r["mimeType"], "{}", r["uri"]);
+        assert_eq!(content["uri"], r["uri"]);
+        let text = content["text"].as_str().unwrap();
+        if r["mimeType"] == "application/json" {
+            serde_json::from_str::<Value>(text).unwrap();
+        } else {
+            assert_eq!(r["mimeType"], "text/markdown; charset=utf-8", "{}", r["uri"]);
+            assert!(text.starts_with("# ") && text.ends_with('\n'), "{}", r["uri"]);
+        }
     }
 }
 
