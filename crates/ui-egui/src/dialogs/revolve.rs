@@ -1,11 +1,12 @@
-//! Compact controls for the 3D and Materials effects: Extrude & Bevel, Revolve, Inflate and Rotate.
-//! The object and the rotation and light gizmos live on the artboard. All document changes run
-//! through the effect dialog's existing preview/commit commands.
+//! Compact controls for the 3D and Materials effects: Extrude & Bevel, Revolve, Inflate and Rotate,
+//! and Extrude & Bevel (Classic), whose own controls are in `three_d_classic`. The object and the
+//! rotation and light gizmos live on the artboard. All document changes run through the effect
+//! dialog's existing preview/commit commands.
 
 use egui::{Align2, FontId, Id, Pos2, Sense, Stroke, vec2};
 use serde_json::{Value, json};
 use vectorz_doc::Unit;
-use vectorz_effects::{EXTRUDE, INFLATE, REVOLVE, ROTATION_PRESETS};
+use vectorz_effects::{CLASSIC_EXTRUDE, EXTRUDE, INFLATE, REVOLVE, ROTATION_PRESETS};
 
 use crate::state::Dialog;
 use crate::theme::Tokens;
@@ -40,8 +41,8 @@ pub(super) fn body(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 m.iter().any(|(k, v)| v.as_f64().map_or_else(|| d.fields.get(k) != Some(v), |default| (d.f64(k, default) - default).abs() > 1e-6))
             });
             let (r, _) = ui.allocate_exact_size(vec2(88.0, 24.0), Sense::hover());
-            let response = ui.interact(r, Id::new("revolve-reset-all"), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Reset all")));
+            let response = ui.interact(r, Id::unique("revolve-reset-all"), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Reset all")));
             if response.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
@@ -60,7 +61,10 @@ pub(super) fn body(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
 }
 
-fn controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
+/// The tabs and controls of the 3D effect in `d.fields["__effect"]`, editing `d.fields`; the
+/// dialog's body and the 3D and Materials panel draw them. With `__panel` set (the panel), the
+/// controls that only the dialog's artboard gizmos use are left out.
+pub(crate) fn controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.spacing_mut().item_spacing.y = 4.0;
     let id = d.str("__effect");
     if id != REVOLVE {
@@ -95,14 +99,13 @@ fn controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
     number(ui, d, "offset", tl!("Offset"), (0.0, 100000.0), "", 1, Some(unit));
     ui.horizontal(|ui| {
-        let mut cap = d.bool("cap");
+        let cap = flag(d, "cap", true);
         let tip = tl!("Close the circular ends of open profiles. Partial sweeps keep their cut sides open.");
-        if widgets::check_tip(ui, c3("Cap"), cap, true, tip) {
-            cap = !cap;
-            d.fields.insert("cap".into(), json!(cap));
+        if widgets::check3_tip(ui, c3("Cap"), cap, true, tip) {
+            d.fields.insert("cap".into(), json!(cap != Some(true)));
         }
         ui.add_space((ui.available_width() - 24.0).max(0.0));
-        if reset_dot(ui, "cap", !cap, "true") {
+        if reset_dot(ui, "cap", cap != Some(true), "true") {
             d.fields.insert("cap".into(), json!(true));
         }
     });
@@ -115,20 +118,22 @@ fn controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.add_space(6.0);
     egui::CollapsingHeader::new(tl!("Advanced")).id_salt("revolve-advanced").show(ui, |ui| {
         number(ui, d, "segments", tl!("Segments"), (8.0, 128.0), "", 0, None);
-        super::form::check(ui, d, "__showAxis", tl!("Show axis"));
+        if !d.bool("__panel") {
+            super::form::check(ui, d, "__showAxis", tl!("Show axis"));
+        }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            let visible = d.fields.get("expandVisibleOnly").and_then(Value::as_bool).unwrap_or(true);
+            let visible = flag(d, "expandVisibleOnly", true);
             let tip = tl!("Trim covered geometry on Expand Appearance. Live preview keeps the full surface. Transparent paints and surfaces exceeding visibility limits retain all faces.");
             let toggled = ui.allocate_ui_with_layout(
                 vec2((ui.available_width() - 30.0).max(100.0), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    widgets::check_tip(ui, tl!("Keep visible surfaces only when expanding"), visible, true, tip)
+                    widgets::check3_tip(ui, tl!("Keep visible surfaces only when expanding"), visible, true, tip)
                 },
             ).inner;
             if toggled {
-                d.fields.insert("expandVisibleOnly".into(), json!(!visible));
+                d.fields.insert("expandVisibleOnly".into(), json!(visible != Some(true)));
             }
-            if reset_dot(ui, "expandVisibleOnly", !visible, "true") {
+            if reset_dot(ui, "expandVisibleOnly", visible != Some(true), "true") {
                 d.fields.insert("expandVisibleOnly".into(), json!(true));
             }
         });
@@ -136,14 +141,15 @@ fn controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
 }
 
 /// `s` as the 3D effects mean it (a solid's cap, not a stroke's; a bevelled edge, not a join).
-fn c3(s: &'static str) -> &'static str {
+pub(super) fn c3(s: &'static str) -> &'static str {
     crate::i18n::tr_ctx(crate::i18n::current(), "3d", s)
 }
 
-/// Extrude & Bevel and Inflate: Object, Rotation and Lighting tabs (Rotate has no Object tab).
-/// The rotation gizmo shows on the first two, the light gizmo on Lighting.
+/// Extrude & Bevel, Inflate and Extrude & Bevel (Classic): Object, Rotation and Lighting tabs
+/// (Rotate has no Object tab). The rotation gizmo shows on the first two, the light gizmo on
+/// Lighting.
 fn solid_controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, id: &str) {
-    let object = id == EXTRUDE || id == INFLATE;
+    let object = id == EXTRUDE || id == INFLATE || id == CLASSIC_EXTRUDE;
     let mut tabs = vec![];
     if object {
         tabs.push(tl!("Object"));
@@ -163,10 +169,16 @@ fn solid_controls(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, id: &str)
     }
     ui.add_space(8.0);
     if super::revolve_gizmo::lighting(d) {
-        lighting_controls(ui, d);
+        if id == CLASSIC_EXTRUDE {
+            super::three_d_classic::surface_controls(ui, d);
+        } else {
+            lighting_controls(ui, d);
+        }
     } else if object && d.str("__tab") != "rotation" {
         let unit = app.session.general_unit();
-        if id == EXTRUDE {
+        if id == CLASSIC_EXTRUDE {
+            super::three_d_classic::object_controls(ui, d, unit);
+        } else if id == EXTRUDE {
             extrude_controls(ui, d, unit);
         } else {
             heading(ui, tl!("Object"));
@@ -245,10 +257,12 @@ fn view_controls(ui: &mut egui::Ui, d: &mut Dialog) {
 }
 
 /// A dropdown of `options` (value, label) for `key`, with its reset dot.
-fn choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, options: &[(Value, &str)]) {
+pub(super) fn choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, options: &[(Value, &str)]) {
     let id = d.str("__effect");
     let default = vectorz_effects::default_params(&id).and_then(|p| p.get(key).cloned()).unwrap_or(Value::Null);
-    let value = d.fields.get(key).cloned().unwrap_or_else(|| default.clone());
+    // A mixed setting (null) shows its default, with its reset dot filled.
+    let mixed = d.fields.get(key).is_some_and(Value::is_null);
+    let value = d.fields.get(key).filter(|v| !v.is_null()).cloned().unwrap_or_else(|| default.clone());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         label(ui, name);
@@ -261,38 +275,49 @@ fn choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, options: &[(
             d.fields.insert(key.into(), v.clone());
         }
         let default_label = options.iter().find(|(v, _)| *v == default).map_or("", |(_, l)| *l);
-        if reset_dot(ui, key, value != default, default_label) {
+        if reset_dot(ui, key, mixed || value != default, default_label) {
             d.fields.insert(key.into(), default.clone());
         }
     });
 }
 
-/// A checkbox for `key`, with its reset dot.
-fn toggle(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, default: bool) {
+/// The checkbox setting `key`: `None` when it is null (the 3D and Materials panel's selected
+/// effects hold it with different values), else its value, or `default` when it has none.
+fn flag(d: &Dialog, key: &str, default: bool) -> Option<bool> {
+    match d.fields.get(key) {
+        Some(Value::Null) => None,
+        value => Some(value.and_then(Value::as_bool).unwrap_or(default)),
+    }
+}
+
+/// A checkbox for `key`, with its reset dot. A mixed setting shows a dash, and a click turns it on.
+pub(super) fn toggle(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, default: bool) {
     ui.horizontal(|ui| {
-        let on = d.bool(key);
-        if widgets::check(ui, name, on, ui.is_enabled()) {
-            d.fields.insert(key.into(), json!(!on));
+        let on = flag(d, key, default);
+        if widgets::check3(ui, name, on, ui.is_enabled()) {
+            d.fields.insert(key.into(), json!(on != Some(true)));
         }
         ui.add_space((ui.available_width() - 24.0).max(0.0));
-        if reset_dot(ui, key, on != default, if default { "true" } else { "false" }) {
+        if reset_dot(ui, key, on != Some(default), if default { "true" } else { "false" }) {
             d.fields.insert(key.into(), json!(default));
         }
     });
 }
 
 fn lighting_controls(ui: &mut egui::Ui, d: &mut Dialog) {
+    let shade = flag(d, "shade", true);
     ui.horizontal(|ui| {
-        let shade = d.bool("shade");
-        if widgets::check(ui, tl!("Shading"), shade, true) {
-            d.fields.insert("shade".into(), json!(!shade));
+        if widgets::check3(ui, tl!("Shading"), shade, true) {
+            d.fields.insert("shade".into(), json!(shade != Some(true)));
         }
         ui.add_space((ui.available_width() - 24.0).max(0.0));
-        if reset_dot(ui, "shade", !shade, "true") {
+        if reset_dot(ui, "shade", shade != Some(true), "true") {
             d.fields.insert("shade".into(), json!(true));
         }
     });
-    ui.add_enabled_ui(d.bool("shade"), |ui| {
+    // A mixed Shading leaves the light settings on, for the effects that shade.
+    ui.add_enabled_ui(flag(d, "shade", true) != Some(false), |ui| {
+        lighting_presets(ui, d);
         light_list(ui, d);
         let mut selected = selected_light(d);
         let before = light_record(&selected);
@@ -308,6 +333,26 @@ fn lighting_controls(ui: &mut egui::Ui, d: &mut Dialog) {
             store_selected(d, &selected);
         }
     });
+}
+
+fn lighting_presets(ui: &mut egui::Ui, d: &mut Dialog) {
+    let names = [tl!("Standard"), tl!("Diffuse"), tl!("Top Left"), tl!("Right")];
+    let current = vectorz_effects::matching_lighting_preset(&super::form::params(d));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        label(ui, tl!("Presets"));
+        let shown = current.and_then(|i| names.get(i).copied()).unwrap_or(tl!("Custom"));
+        if let Some(preset) = widgets::dropdown(ui, "three-d-lighting-presets", shown, &names, VALUE_W + rail_width(ui) + 6.0)
+            .and_then(|i| vectorz_effects::LIGHTING_PRESETS.get(i))
+            && let Some(patch) = preset.params().as_object()
+        {
+            d.fields.extend(patch.clone());
+            d.fields.insert("__light".into(), json!(0));
+            ui.memory_mut(|m| m.stop_text_input());
+            super::revolve_gizmo::clear(ui.ctx());
+        }
+    });
+    ui.add_space(4.0);
 }
 
 const LIGHT_KEYS: [(&str, &str); 6] = [
@@ -349,11 +394,11 @@ pub(super) fn light_options(d: &Dialog) -> vectorz_three_d::Revolve {
     vectorz_effects::revolve_options(&super::form::params(&selected_light(d)))
 }
 
-fn light_record(d: &Dialog) -> Value {
+pub(super) fn light_record(d: &Dialog) -> Value {
     Value::Object(LIGHT_KEYS.iter().filter_map(|(key, field)| d.fields.get(*field).map(|v| ((*key).into(), v.clone()))).collect())
 }
 
-fn store_selected(d: &mut Dialog, selected: &Dialog) {
+pub(super) fn store_selected(d: &mut Dialog, selected: &Dialog) {
     if let Some(list) = explicit_lights(d) {
         let index = light_index(d, list.len());
         let mut list = list.clone();
@@ -376,7 +421,7 @@ pub(super) fn set_light_value(d: &mut Dialog, key: &str, value: Value) {
     store_selected(d, &selected);
 }
 
-fn light_list(ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn light_list(ui: &mut egui::Ui, d: &mut Dialog) {
     let mut list = explicit_lights(d).cloned().unwrap_or_else(|| vec![light_record(d)]);
     let mut index = light_index(d, list.len());
     let names: Vec<_> = (1..=list.len()).map(|i| format!("{} {i}", c3("Light"))).collect();
@@ -392,8 +437,10 @@ fn light_list(ui: &mut egui::Ui, d: &mut Dialog) {
             super::revolve_gizmo::clear(ui.ctx());
         }
     });
+    // Add Light is off while a setting of the single light is mixed (null).
+    let mixed = explicit_lights(d).is_none() && LIGHT_KEYS.iter().any(|(_, key)| d.fields.get(*key).is_some_and(Value::is_null));
     ui.horizontal(|ui| {
-        if ui.add_enabled(list.len() < vectorz_three_d::MAX_LIGHTS, egui::Button::new(tl!("Add Light"))).clicked() {
+        if ui.add_enabled(list.len() < vectorz_three_d::MAX_LIGHTS && !mixed, egui::Button::new(tl!("Add Light"))).clicked() {
             let mut added = selected_light(d);
             let defaults = vectorz_effects::default_params(&d.str("__effect")).unwrap_or(json!({}));
             for (_, key) in LIGHT_KEYS {
@@ -437,18 +484,19 @@ fn light_color(ui: &mut egui::Ui, d: &mut Dialog) {
         }
         ui.label(format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]));
         ui.add_space((ui.available_width() - 24.0).max(0.0));
-        if reset_dot(ui, "lightColor", rgb != [255; 3], "#FFFFFF") {
+        let mixed = d.fields.get("lightColor").is_some_and(Value::is_null);
+        if reset_dot(ui, "lightColor", mixed || rgb != [255; 3], "#FFFFFF") {
             d.fields.insert("lightColor".into(), json!("#ffffff"));
         }
     });
 }
 
-fn heading(ui: &mut egui::Ui, text: &str) {
+pub(super) fn heading(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(text).font(crate::theme::semibold(13.0)).color(t.text));
 }
 
-fn label(ui: &mut egui::Ui, name: &str) {
+pub(super) fn label(ui: &mut egui::Ui, name: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(LABEL_W, 24.0), Sense::hover());
     ui.put(r, egui::Label::new(egui::RichText::new(name).size(12.5).color(t.text)).halign(egui::Align::Min).truncate()).on_hover_text(name);
@@ -461,7 +509,7 @@ fn rail_width(ui: &egui::Ui) -> f32 {
 
 /// A value can be typed, dragged, scrubbed by its label, or moved on its slider.
 #[allow(clippy::too_many_arguments)]
-fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64, f64), suffix: &str, decimals: usize, unit: Option<Unit>) {
+pub(super) fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64, f64), suffix: &str, decimals: usize, unit: Option<Unit>) {
     let default = vectorz_effects::default_params(&d.str("__effect")).and_then(|p| p.get(key).and_then(Value::as_f64)).unwrap_or(0.0);
     let from = |n| unit.map_or(n, |u| u.from_pt(n));
     let to = |n| unit.map_or(n, |u| u.to_pt(n));
@@ -499,7 +547,9 @@ fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64,
         if response.changed() {
             next = Some(value);
         }
-        if let Some(n) = scrub::field(ui, response.id, response.rect, &value.to_string(), Some(value), decimals as i32) {
+        if let Some(n) =
+            scrub::field(ui, response.id, response.rect, &value.to_string(), Some(value), decimals as i32, &(from(range.0)..=from(range.1)))
+        {
             next = Some(n);
         }
         // Lengths' rails cover a useful working range; larger values can still be typed.
@@ -515,7 +565,7 @@ fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64,
         let places = ((f64::from(ui.input(|i| i.aim_radius())) / speed).log10().ceil().clamp(0.0, 15.0) as usize).min(decimals);
         let number = ui.style().number_formatter.format(value, places..=decimals);
         let shown = widgets::SliderValue::text(number.parse().unwrap_or(value), rail_min..=rail_max, format!("{number}{suffix}"));
-        let slider = widgets::color_slider_valued(
+        let slider = widgets::color_slider_stepped(
             ui,
             ("revolve-slider", key),
             name,
@@ -524,10 +574,12 @@ fn number(ui: &mut egui::Ui, d: &mut Dialog, key: &str, name: &str, range: (f64,
             rail,
             &|_| t.input_border,
         );
-        if let (Some(n), _) = slider {
-            next = Some(rail_min + f64::from(n) * (rail_max - rail_min));
+        if let Some(n) = slider.0.map(|n| rail_min + f64::from(n) * (rail_max - rail_min)).or(slider.2) {
+            next = Some(n);
         }
-        if reset_dot(ui, key, (to(value) - default).abs() > 1e-6, &format!("{}{}", from(default), suffix)) {
+        // A setting the 3D and Materials panel's selected effects hold with different values is null.
+        let mixed = d.fields.get(key).is_some_and(Value::is_null);
+        if reset_dot(ui, key, mixed || (to(value) - default).abs() > 1e-6, &format!("{}{}", from(default), suffix)) {
             next = Some(from(default));
         }
     });
@@ -547,10 +599,10 @@ fn dot(ui: &egui::Ui, p: Pos2, changed: bool) {
     }
 }
 
-fn reset_dot(ui: &mut egui::Ui, key: &str, changed: bool, default: &str) -> bool {
+pub(super) fn reset_dot(ui: &mut egui::Ui, key: &str, changed: bool, default: &str) -> bool {
     let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
-    let response = ui.interact(r, Id::new(("revolve-reset", key)), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Reset to default")));
+    let response = ui.interact(r, Id::unique(("revolve-reset", key)), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Reset to default")));
     if response.hovered() {
         ui.painter().rect_filled(r, 3.0, Tokens::get(ui.ctx()).hover);
     }
@@ -559,5 +611,4 @@ fn reset_dot(ui: &mut egui::Ui, key: &str, changed: bool, default: &str) -> bool
 }
 
 #[cfg(test)]
-#[path = "tests_revolve.rs"]
 mod tests;

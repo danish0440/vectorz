@@ -9,6 +9,7 @@ use serde_json::json;
 use vectorz_color::cms;
 use vectorz_engine::Session;
 use vectorz_engine::cmd::colormgmt::{PROFILES_KEY, doc_profiles};
+use vectorz_engine::store::MAX_PRESET_FILE;
 use vectorz_geom::Affine;
 use vectorz_render::{RenderOptions, Renderer};
 use vectorz_testkit::fixtures::{exec, id_of, rect, select, session};
@@ -227,6 +228,43 @@ fn live_objects_draw_through_new_color_settings() {
     }
 }
 
+/// The art drawn for 3D effects and color adjustments follows the Color Settings: in the next
+/// frame, a CMYK cyan rectangle with Revolve, with Extrude & Bevel, with Inflate, with Rotate, with
+/// Brightness/Contrast, and a group holding it with Brightness/Contrast, draw through the new
+/// working CMYK profile.
+#[test]
+fn effect_art_draws_through_new_color_settings() {
+    let _g = settings();
+    let old = cms::active_settings();
+    let cyan = json!({"c": 100, "m": 0, "y": 0, "k": 0});
+    let brighter = json!({"brightness": 30});
+    let cases = [
+        ("the revolved rectangle", "threeD.revolve", json!({}), false),
+        ("the extruded rectangle", "threeD.extrude", json!({}), false),
+        ("the inflated rectangle", "threeD.inflate", json!({}), false),
+        ("the rotated rectangle", "threeD.rotate", json!({}), false),
+        ("the adjusted rectangle", "adjust.brightnessContrast", brighter.clone(), false),
+        ("the adjusted group", "adjust.brightnessContrast", brighter, true),
+    ];
+    let opts = RenderOptions { background: Some([255, 255, 255, 255]), ..Default::default() };
+    let frame = |r: &mut Renderer, s: &Session| r.render(&s.doc().unwrap().doc, 400, 300, Affine::IDENTITY, &opts).pixels;
+    for (what, effect, params, grouped) in cases {
+        let mut s = session();
+        let shape = rect(&mut s, 150.0, 60.0, 60.0, 120.0);
+        exec(&mut s, "paint.setFill", json!({"ids": [shape.0], "color": cyan}));
+        let target = if grouped { id_of(&exec(&mut s, "object.group", json!({"ids": [shape.0]}))) } else { shape };
+        exec(&mut s, "effect.apply", json!({"ids": [target.0], "effect": effect, "params": params}));
+        let mut r = Renderer::new();
+        let before = frame(&mut r, &s);
+        s.execute("edit.colorSettings", &json!({"cmyk": cms::DEVICE_CMYK})).unwrap();
+        let fresh = frame(&mut Renderer::new(), &s);
+        let warm = frame(&mut r, &s);
+        cms::set_active(&old).unwrap();
+        assert!(fresh != before, "{what}: the new profile changes the frame");
+        assert!(warm == fresh, "{what}: drawn as a new renderer draws it");
+    }
+}
+
 /// #2276: with a working RGB space other than sRGB, the Eyedropper takes an image's sRGB pixel
 /// into the working space, so the sampled fill shows as the pixel it was picked from.
 #[test]
@@ -246,7 +284,7 @@ fn the_eyedropper_takes_an_image_pixel_into_the_working_rgb_space() {
         let l = d.layers[0].id;
         let id = d.alloc_id();
         let xf = Affine::translate((300.0, 0.0)) * Affine::scale(100.0);
-        let im = ImageObject { key: "px".into(), width: 1, height: 1, xf, link: None, placement: Default::default() };
+        let im = ImageObject { key: "px".into(), width: 1, height: 1, xf, link: None, placement: Default::default(), pixels: None };
         d.insert(Some(l), 0, Node::new(id, NodeKind::Image(Box::new(im)))).map_err(|e| vectorz_engine::EngineError::Other(e.to_string()))
     })
     .unwrap();
@@ -307,5 +345,190 @@ fn a_freeform_gradient_expands_with_its_rgb_values_in_the_working_rgb_space() {
     for (c, shown, field) in &mixed {
         let close = shown.iter().zip(field).all(|(a, b)| (a - b).abs() < 2.0 / 255.0);
         assert!(matches!(c, Color::Rgb { .. }) && close, "{c:?} shows {shown:?} for {field:?}");
+    }
+}
+
+/// With a working RGB space other than sRGB, RGB freeform points mix in that space on the canvas
+/// and in a writer, as Object > Expand mixes them.
+#[test]
+fn freeform_rgb_points_mix_in_the_working_rgb_space() {
+    use vectorz_color::freeform::spread_scale;
+    use vectorz_color::{Color, Freeform, FreeformPoint, Gradient, GradientKind, GradientPaint, Paint};
+    use vectorz_doc::{Appearance, Document, Node};
+    use vectorz_geom::{Point, Rect, shapes};
+    let _g = settings();
+    let old = cms::active_settings();
+    cms::set_active(&cms::ColorSettings { rgb: cms::WIDE_GAMUT_RGB.into(), ..old.clone() }).unwrap();
+    let box_ = Rect::new(0.0, 0.0, 100.0, 100.0);
+    let (a, b) = (Color::rgb(0.9, 0.1, 0.1), Color::rgb(0.1, 0.2, 0.9));
+    let p = |x, c| FreeformPoint::new(Point::new(x, 50.5), c);
+    let f = Freeform { points: vec![p(20.5, a), p(80.5, b)], ..Default::default() };
+    let mut g = GradientPaint::new(Gradient { kind: GradientKind::Freeform, ..Default::default() });
+    g.freeform = Some(f.clone());
+    let mut d = Document::new(100.0, 100.0);
+    let id = d.alloc_id();
+    d.insert(Some(d.layers[0].id), 0, Node::path(id, shapes::rectangle(box_), Appearance::basic(Paint::Gradient(Box::new(g)), Paint::None, 0.0)))
+        .unwrap();
+    let opts = RenderOptions { background: Some([255, 255, 255, 255]), ..Default::default() };
+    let canvas = Renderer::new().render(&d, 100, 100, Affine::IDENTITY, &opts).pixel(50, 50);
+    let svg = vectorz_svg::export_full(&d, &vectorz_svg::ExportOptions::default(), None).svg;
+    let data = svg.split("data:image/png;base64,").nth(1).unwrap().split('"').next().unwrap();
+    let png = image::load_from_memory(&vectorz_testkit::format::base64_decode(data).unwrap()).unwrap().to_rgba8();
+    let written = png.get_pixel(png.width() / 2, png.height() / 2).0;
+    let want = Color::rgb(0.5, 0.15, 0.5).to_rgba8(1.0);
+    let display = f.field(spread_scale(box_)).sample(Point::new(50.5, 50.5)).0.map(|v| (v * 255.0).round() as u8);
+    cms::set_active(&old).unwrap();
+    let near = |got: [u8; 4]| got.iter().zip(want).take(3).all(|(g, w)| g.abs_diff(w) <= 3);
+    assert!(near(canvas), "canvas: {canvas:?} vs {want:?}");
+    assert!(near(written), "SVG: {written:?} vs {want:?}");
+    assert!(display.iter().zip(want).any(|(g, w)| g.abs_diff(w) > 8), "the display mix differs: {display:?} vs {want:?}");
+}
+
+/// Loading a new file of the working RGB profile (named after its description, as before) takes
+/// effect at once: CMYK colors convert into the new file and the canvas redraws, without choosing
+/// the working spaces again.
+#[test]
+fn loading_the_working_rgb_profile_again_takes_effect_at_once() {
+    let _g = settings();
+    let old = cms::active_settings();
+    // A built-in RGB profile's file renamed `name`: padded with spaces, which names drop.
+    let renamed = |builtin: &str, name: &str| {
+        let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+        let mut bytes = cms::icc_bytes(builtin).unwrap().to_vec();
+        let (from, to) = (utf16(builtin), utf16(&format!("{name:<width$}", width = builtin.len())));
+        let at = bytes.windows(from.len()).position(|w| w == from).unwrap();
+        bytes[at..at + to.len()].copy_from_slice(&to);
+        bytes
+    };
+    let name = "Reload RGB";
+    let dir = vectorz_testkit::temp_dir("reload-working-rgb");
+    let load = |s: &mut Session, builtin: &str| {
+        let path = dir.join(format!("{}.icc", builtin.len()));
+        std::fs::write(&path, renamed(builtin, name)).unwrap();
+        let r = s.execute("color.loadProfile", &json!({"path": path.to_str().unwrap()})).unwrap();
+        assert_eq!(r["name"], name);
+    };
+    let cmyk = cms::register_icc(&cms::icc_bytes(cms::GENERIC_CMYK).unwrap(), Some("Reload Working CMYK".into())).unwrap().name;
+    let cyan = [1.0, 0.0, 0.0, 0.0];
+    let convert = || cms::active().cmyk_to_rgb(cyan, old.intent);
+    let mut s = session();
+    load(&mut s, cms::DISPLAY_P3);
+    s.execute("edit.colorSettings", &json!({"rgb": name, "cmyk": cmyk})).unwrap();
+    let in_p3 = convert();
+    let revision = s.doc().unwrap().revision;
+    load(&mut s, cms::PROPHOTO_RGB);
+    let after = convert();
+    let redrawn = s.doc().unwrap().revision > revision;
+    // What a CMYK profile loaded afresh gives in the new file.
+    let fresh = cms::register_icc(&cms::icc_bytes(cms::GENERIC_CMYK).unwrap(), Some("Reload Working CMYK 2".into())).unwrap().name;
+    let want = cms::Cms::new(&cms::ColorSettings { cmyk: fresh, ..cms::active_settings() }).unwrap().cmyk_to_rgb(cyan, old.intent);
+    cms::set_active(&old).unwrap();
+    assert!(in_p3.iter().zip(want).any(|(a, b)| (a - b).abs() > 0.05), "Display P3 {in_p3:?} vs ProPhoto {want:?}");
+    assert!(after.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-4), "after the reload {after:?}, want {want:?}");
+    assert!(redrawn, "the canvas redraws");
+}
+
+/// A folder of its own for the test `tag`, empty.
+fn fresh_dir(tag: &str) -> std::path::PathBuf {
+    let dir = vectorz_testkit::temp_dir(&format!("color-settings-{tag}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// An ICC file of an RGB profile named `name` (a built-in one with its description replaced by a
+/// name of the same length).
+#[allow(clippy::unwrap_used, reason = "a test helper: a missing built-in profile fails the test")]
+fn icc_named(name: &str) -> Vec<u8> {
+    let builtin = cms::DISPLAY_P3;
+    assert_eq!(builtin.len(), name.len());
+    let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+    let mut bytes = cms::icc_bytes(builtin).unwrap().to_vec();
+    let (from, to) = (utf16(builtin), utf16(name));
+    let at = bytes.windows(from.len()).position(|w| w == from).unwrap();
+    bytes[at..at + to.len()].copy_from_slice(&to);
+    bytes
+}
+
+/// Puts the default Color Settings back, unregisters `profile` and deletes `paths` when dropped,
+/// also after a failed assertion, so the next test starts from the defaults.
+struct ColorSettingsReset {
+    profile: Option<&'static str>,
+    paths: Vec<std::path::PathBuf>,
+}
+
+impl Drop for ColorSettingsReset {
+    /// The defaults back, the profile unregistered and the paths deleted.
+    fn drop(&mut self) {
+        let _ = cms::set_active(&cms::ColorSettings::default());
+        if let Some(name) = self.profile {
+            cms::unregister_icc(name);
+        }
+        for path in &self.paths {
+            let _ = std::fs::remove_dir_all(path).or_else(|_| std::fs::remove_file(path));
+        }
+    }
+}
+
+/// #6335: Edit › Color Settings come back in the next session: the working spaces (a loaded
+/// profile among them, registered again by the profile store first), the intent and black point
+/// compensation. A session nobody attached a file to keeps nothing, and nothing is written before
+/// the settings change.
+#[test]
+fn color_settings_come_back_in_the_next_session() {
+    let _g = settings();
+    let root = fresh_dir("color-settings");
+    let (profiles, file) = (root.join("Color Profiles"), root.join("Color Settings.json"));
+    let loaded = "StoreRGB-6";
+    let icc = vectorz_testkit::temp_dir("store-color-settings").join("loaded.icc");
+    let _reset = ColorSettingsReset { profile: Some(loaded), paths: vec![root.clone(), icc.clone()] };
+    std::fs::write(&icc, icc_named(loaded)).unwrap();
+
+    let mut a = Session::new();
+    a.attach_profile_store(profiles.clone());
+    a.attach_color_settings(file.clone());
+    a.execute("color.loadProfile", &json!({"path": icc.to_str().unwrap()})).unwrap();
+    a.execute("edit.colorSettings", &json!({})).unwrap();
+    assert!(!file.exists(), "nothing to keep before the settings change");
+    a.execute("edit.colorSettings", &json!({"rgb": loaded, "cmyk": cms::DEVICE_CMYK, "intent": "perceptual", "bpc": false})).unwrap();
+    let chosen = cms::ColorSettings { rgb: loaded.into(), cmyk: cms::DEVICE_CMYK.into(), intent: cms::Intent::Perceptual, bpc: false };
+    assert_eq!(cms::active_settings(), chosen);
+
+    // The next start begins with the defaults and without the loaded profile, which the profile
+    // store registers again before the settings name it.
+    cms::set_active(&cms::ColorSettings::default()).unwrap();
+    assert!(cms::unregister_icc(loaded));
+    let mut b = Session::new();
+    b.attach_profile_store(profiles);
+    b.attach_color_settings(file.clone());
+    assert_eq!(cms::active_settings(), chosen, "the saved settings are the active ones again");
+
+    // Without a file, a change is kept only for the process.
+    let mut c = Session::new();
+    c.execute("edit.colorSettings", &json!({"bpc": true})).unwrap();
+    let saved: cms::ColorSettings = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved, chosen, "the file is left alone");
+}
+
+/// #6335: saved Color Settings that can't be used (a profile that is gone, a damaged or oversized
+/// file) leave the defaults and the file as it is; the next change writes over it.
+#[test]
+fn saved_color_settings_that_cannot_be_used_leave_the_defaults() {
+    let _g = settings();
+    let dir = fresh_dir("color-settings-bad");
+    let _reset = ColorSettingsReset { profile: None, paths: vec![dir.clone()] };
+    let file = dir.join("Color Settings.json");
+    std::fs::create_dir_all(&dir).unwrap();
+    let gone = json!({"rgb": cms::SRGB, "cmyk": "A Profile That Is Gone", "intent": "perceptual", "bpc": false}).to_string().into_bytes();
+    let oversized = vec![b' '; MAX_PRESET_FILE as usize + 1];
+    for bytes in [gone, b"not json".to_vec(), oversized] {
+        cms::set_active(&cms::ColorSettings::default()).unwrap();
+        std::fs::write(&file, &bytes).unwrap();
+        let mut s = Session::new();
+        s.attach_color_settings(file.clone());
+        assert_eq!(cms::active_settings(), cms::ColorSettings::default());
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "left as it is");
+        s.execute("edit.colorSettings", &json!({"bpc": false})).unwrap();
+        let saved: cms::ColorSettings = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert!(!saved.bpc && saved.cmyk == cms::GENERIC_CMYK, "written over by the next change: {saved:?}");
     }
 }

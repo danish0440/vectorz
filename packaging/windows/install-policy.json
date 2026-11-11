@@ -1,0 +1,41 @@
+{
+  "id": "vectorz",
+  "name": "VectorZ",
+  "upgradeCode": "601C6437-08AE-4645-ADCC-27F036C2EA2F",
+  "sources": [
+    "vectorz.wxs"
+  ],
+  "icon": "assets/app-icon/vectorz.ico",
+  "localization": [
+    "vectorz.en-us.wxl"
+  ],
+  "extensions": [
+    "UI",
+    "Util"
+  ],
+  "payloads": [
+    "vectorz-cli.exe",
+    "vectorz.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\vectorz.exe",
+      "",
+      "[#VectorzExe]"
+    ],
+    [
+      "-1",
+      "Software\\VectorZ",
+      "InstallDir",
+      "[INSTALLFOLDER]"
+    ],
+    [
+      "-1",
+      "Software\\VectorZ",
+      "DesktopShortcut",
+      "#1"
+    ]
+  ],
+  "mode": "dualScope"
+}

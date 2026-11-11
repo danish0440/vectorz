@@ -20,8 +20,18 @@ pub(crate) fn lighting(d: &Dialog) -> bool {
     d.str("__gizmo") == "light"
 }
 
+/// Does the effect take light: Shading on, or for Extrude & Bevel (Classic) a Diffuse or Plastic
+/// surface?
+fn lit(d: &Dialog) -> bool {
+    if d.str("__effect") == vectorz_effects::CLASSIC_EXTRUDE {
+        matches!(d.str("surface").as_str(), "diffuse" | "plastic")
+    } else {
+        d.bool("shade")
+    }
+}
+
 pub(crate) fn hint(d: &Dialog) -> &'static str {
-    if !d.bool("preview") || (lighting(d) && !d.bool("shade")) {
+    if !d.bool("preview") || (lighting(d) && !lit(d)) {
         tl!("Drag values or labels. Double-click a value to type.")
     } else if lighting(d) {
         tl!("Drag the light, or its rings. Shift snaps to 15°.")
@@ -30,8 +40,9 @@ pub(crate) fn hint(d: &Dialog) -> &'static str {
     }
 }
 
+/// Temp-memory key for the revolve gizmo drag state.
 fn drag_id() -> Id {
-    Id::new("revolve-gizmo-drag")
+    Id::unique("revolve-gizmo-drag")
 }
 
 pub(crate) fn dragging(ctx: &egui::Context) -> bool {
@@ -189,7 +200,7 @@ fn snap_height(height: f64, snap: bool) -> f64 {
 
 pub(super) fn show(app: &VectorzApp, ctx: &egui::Context, d: &mut Dialog) {
     let light_mode = lighting(d);
-    if !d.bool("preview") || (light_mode && !d.bool("shade")) {
+    if !d.bool("preview") || (light_mode && !lit(d)) {
         clear(ctx);
         return;
     }
@@ -201,7 +212,7 @@ pub(super) fn show(app: &VectorzApp, ctx: &egui::Context, d: &mut Dialog) {
             rect = rect.union(label.expand(2.0));
         }
     }
-    egui::Area::new(Id::new("revolve-gizmo-area")).order(egui::Order::Foreground).fixed_pos(rect.min).movable(false).show(ctx, |ui| {
+    egui::Area::new(Id::unique("revolve-gizmo-area")).order(egui::Order::Foreground).fixed_pos(rect.min).movable(false).show(ctx, |ui| {
         ui.set_clip_rect(geometry.xf.rect);
         let response = ui.allocate_rect(rect.intersect(geometry.xf.rect), Sense::drag());
         let options = super::revolve::light_options(d);
