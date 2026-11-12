@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use vectorz_doc::{Artboard, Background, ColorMode, Document, Unit};
 use vectorz_geom::{Point, Rect};
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, clock_date, cmd, date_param, str_param, switch_or};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Document Presets",
             [],
             None,
-            "{category?: \"Recent\"|\"Saved\"|\"Mobile\"|\"Web\"|\"Print\"|\"Film & Video\"|\"Art & Illustration\"|\"Branding\"|\"Social\"} the New Document presets by category (Recent: the last sizes used; Saved: the user's presets) → {categories: [{name, presets: [{name, size: \"1920 × 1080 px\", width: pt, height: pt, units, orientation, artboards, artboardLayout: {layout, columns, spacing, rightToLeft}, bleed, backgroundContents, colorMode, rasterEffectsPpi, previewMode}]}]}; file.new {preset: name} starts from one",
+            "{category?: \"Recent\"|\"Saved\"|\"Mobile\"|\"Web\"|\"Print\"|\"Film & Video\"|\"Art & Illustration\"|\"Branding\"|\"Social\"} the New Document presets by category (Recent: the last sizes used; Saved: the user's presets) → {categories: [{name, presets: [{name, size: \"1920 × 1080 px\", width: pt, height: pt, units, orientation, artboards, artboardLayout: {layout, columns, spacing, rightToLeft}, bleed, backgroundContents, colorMode, rasterEffectsPpi, previewMode, alignNewObjectsToPixelGrid (on in the Mobile and Web presets)}]}]}; file.new {preset: name} starts from one",
             always,
             list
         ),
@@ -144,6 +144,10 @@ pub struct DocSettings {
     #[serde(deserialize_with = "de_ppi")]
     pub raster_effects_ppi: f64,
     pub preview_mode: PreviewMode,
+    /// Align New Objects to Pixel Grid ([`vectorz_doc::DocSetup::align_new_objects_to_pixel_grid`]):
+    /// on in the Mobile and Web presets, off in the others and in a saved or Recent preset from
+    /// before it.
+    pub align_new_objects_to_pixel_grid: bool,
 }
 
 impl Default for DocSettings {
@@ -163,6 +167,7 @@ impl Default for DocSettings {
             color_mode: ColorMode::Rgb,
             raster_effects_ppi: 72.0,
             preview_mode: PreviewMode::Default,
+            align_new_objects_to_pixel_grid: false,
         }
     }
 }
@@ -211,6 +216,7 @@ impl DocSettings {
             "colorMode": color_mode_id(self.color_mode),
             "rasterEffectsPpi": self.raster_effects_ppi,
             "previewMode": self.preview_mode.id(),
+            "alignNewObjectsToPixelGrid": self.align_new_objects_to_pixel_grid,
         })
     }
 
@@ -273,6 +279,7 @@ impl DocSettings {
         if let Some(m) = p.get("previewMode").filter(|v| !v.is_null()) {
             self.preview_mode = m.as_str().and_then(PreviewMode::parse).ok_or_else(|| bad(cmd, "previewMode must be default, pixel or overprint"))?;
         }
+        self.align_new_objects_to_pixel_grid = switch_or(p, "alignNewObjectsToPixelGrid", self.align_new_objects_to_pixel_grid, cmd)?;
         let extent = self.boards().iter().fold(Rect::ZERO, |a, r| a.union(*r));
         if extent.width().max(extent.height()) + self.bleed.iter().fold(0.0f64, |a, b| a.max(*b)) * 2.0 > crate::MAX_COORD {
             return Err(bad(cmd, "the artboards don't fit on the canvas: fewer artboards, less spacing or a smaller size"));
@@ -330,6 +337,7 @@ impl DocSettings {
         d.raster_effects_ppi = self.raster_effects_ppi;
         d.setup.bleed = self.bleed;
         d.setup.background = self.background;
+        d.setup.align_new_objects_to_pixel_grid = self.align_new_objects_to_pixel_grid;
         d.artboards = self
             .boards()
             .into_iter()
@@ -338,8 +346,13 @@ impl DocSettings {
                 id: i as u32 + 1,
                 name: format!("Artboard {}", i + 1),
                 rect,
+                locked: false,
                 show_center_mark: false,
                 show_cross_hairs: false,
+                show_video_safe_areas: false,
+                video_ruler_pixel_aspect_ratio: 1.0,
+                color: None,
+                guide_label: None,
             })
             .collect();
         d
@@ -513,6 +526,7 @@ pub const CATEGORIES: &[Category] = &[
             ("Logo 1000×1000", 1000.0, 1000.0, PX),
             ("Business Card 3.5 × 2 in", 3.5, 2.0, IN),
             ("Business Card 85 × 55 mm", 85.0, 55.0, MM),
+            ("Business Card 91 × 55 mm", 91.0, 55.0, MM),
             ("Letterhead Letter", 8.5, 11.0, IN),
             ("Letterhead A4", 210.0, 297.0, MM),
             ("Envelope DL", 220.0, 110.0, MM),
@@ -537,6 +551,10 @@ pub const CATEGORIES: &[Category] = &[
     ),
 ];
 
+/// The built-in categories whose presets start with Align New Objects to Pixel Grid on
+/// (<https://helpx.adobe.com/illustrator/desktop/get-started/learn-the-basics/pixel-preview-mode-for-web-graphics.html>).
+const PIXEL_ALIGNED_CATEGORIES: [&str; 2] = ["Mobile", "Web"];
+
 /// The category tabs in order: Recent, Saved, then the built-in categories.
 pub fn category_names() -> impl Iterator<Item = &'static str> {
     ["Recent", "Saved"].into_iter().chain(CATEGORIES.iter().map(|c| c.0))
@@ -545,7 +563,8 @@ pub fn category_names() -> impl Iterator<Item = &'static str> {
 /// The built-in presets of one category: screen sizes in pixels, the others in `general`
 /// (Preferences ▸ Units ▸ General).
 fn builtin(c: &Category, general: Unit) -> impl Iterator<Item = DocSettings> + '_ {
-    let (_, color_mode, ppi, presets) = *c;
+    let (category, color_mode, ppi, presets) = *c;
+    let align = PIXEL_ALIGNED_CATEGORIES.contains(&category);
     presets.iter().map(move |&(name, w, h, units)| DocSettings {
         name: name.into(),
         width: units.to_pt(w),
@@ -553,6 +572,7 @@ fn builtin(c: &Category, general: Unit) -> impl Iterator<Item = DocSettings> + '
         units: if units == Unit::Pixels { units } else { general },
         color_mode,
         raster_effects_ppi: ppi,
+        align_new_objects_to_pixel_grid: align,
         ..DocSettings::default()
     })
 }

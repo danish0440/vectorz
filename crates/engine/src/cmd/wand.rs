@@ -8,7 +8,7 @@ use vectorz_color::Paint;
 use vectorz_doc::{Document, Node, NodeId, NodeKind};
 
 use super::select::selectable_ids;
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_or, cmd, has_doc, id_param, str_param};
 
 /// Magic Wand panel settings. Tolerances: colours as 0–255 RGB distance, stroke weight in
 /// points, opacity in percent.
@@ -137,13 +137,14 @@ fn paintable(doc: &Document) -> Vec<NodeId> {
         if matches!(n.kind, NodeKind::Compound { .. }) {
             compounds.push(n.id);
             out.push(n.id);
-        } else if !n.is_container() {
+        } else if !n.is_container() && !n.is_ruler_guide() {
             out.push(n.id);
         }
     });
+    let editable = doc.editable();
     out.retain(|id| {
         !doc.parent_of(*id).is_some_and(|p| compounds.contains(&p))
-            && doc.is_editable(*id)
+            && editable(*id)
             && doc.is_visible(*id)
             && doc.node(*id).is_some_and(|n| n.visible)
     });

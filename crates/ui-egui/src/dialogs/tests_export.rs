@@ -16,10 +16,15 @@ pub(super) type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 /// An app with `artboards` 60×40 pt artboards whose save dialog answers `/out/<suggested>` and
 /// whose writer records what it is given.
 pub(super) fn app(artboards: usize) -> (VectorzApp, Written) {
+    app_saving(artboards, |p| format!("/out/{}", p.name))
+}
+
+/// [`app`], with a save dialog that answers `pick`.
+pub(super) fn app_saving(artboards: usize, pick: fn(&crate::FilePick) -> String) -> (VectorzApp, Written) {
     let written = Written::default();
     let w = written.clone();
     let services = Services {
-        pick_save: Some(Box::new(|p: &crate::FilePick| Some(format!("/out/{}", p.name)))),
+        pick_save: Some(Box::new(move |p: &crate::FilePick| Some(pick(p)))),
         write: Some(Box::new(move |p: &str, b: &[u8]| {
             w.borrow_mut().push((p.to_string(), b.to_vec()));
             Ok(())
@@ -101,6 +106,37 @@ fn export_as_png_picks_the_file_then_shows_png_options() {
     assert_eq!(&written.borrow()[0].1[16..20], 120u32.to_be_bytes(), "60 pt at 144 ppi");
 }
 
+/// File › Export › Export As PNG… exports the artboard in use, not the first (#5502), and each
+/// artboard the Artboard tool has selected, one file each.
+#[test]
+fn export_as_png_exports_the_active_artboard() {
+    let (mut app, written) = app(2);
+    // The ellipse is on the first artboard; the second is empty.
+    let opaque = |bytes: &[u8]| image::load_from_memory(bytes).unwrap().to_rgba8().pixels().any(|p| p.0[3] > 0);
+    app.view_mut().unwrap().artboard = 1;
+    app.run("file.export.png", json!({})).unwrap();
+    assert_eq!(app.ui.dialog.as_ref().unwrap().fields["artboard"], json!(1));
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    assert!(!opaque(&written.borrow()[0].1), "the second artboard, which is empty");
+    app.view_mut().unwrap().artboard = 0;
+    app.run("file.export.png", json!({})).unwrap();
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    assert!(opaque(&written.borrow()[1].1), "the first artboard, with the ellipse");
+    // A choice given is kept.
+    app.run("file.export.png", json!({"useArtboards": false})).unwrap();
+    assert!(app.ui.dialog.as_ref().unwrap().fields.get("artboard").is_none_or(serde_json::Value::is_null));
+    app.ui.dialog = None;
+    // Artboards the Artboard tool selected: one file each.
+    app.select_tool("artboard");
+    app.session.set_tool_option("selected", &json!([0, 1]));
+    app.run("file.export.png", json!({})).unwrap();
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    assert_eq!(names(&written)[2..], ["/out/Untitled-1-Artboard-1.png", "/out/Untitled-1-Artboard-2.png"]);
+}
+
 #[test]
 fn export_as_with_a_range_then_png_options_writes_one_file_per_artboard() {
     let (mut app, written) = app(3);
@@ -142,6 +178,15 @@ fn a_bad_range_keeps_export_as_open() {
     assert!(confirm(&mut app).is_err());
     assert_eq!(kind(&app), Some("exportAs"));
     assert!(written.borrow().is_empty());
+}
+
+/// An emptied Range field shows an example of the artboard numbers it takes, as Save As's does.
+#[test]
+fn an_empty_export_as_range_shows_an_example() {
+    let (mut app, _) = app(2);
+    app.run("file.exportAs", json!({"useArtboards": true, "range": ""})).unwrap();
+    let text = crate::tests_labels::painted_text(&mut app, |app, ui| show(app, ui.ctx()));
+    assert!(text.lines().any(|l| l == "1-3, 5"), "{text}");
 }
 
 #[test]
@@ -245,7 +290,7 @@ fn pdf_artboards_continue_in_the_save_pdf_dialog() {
 /// format, each file holding that artboard's art (the ellipse is on artboard 1).
 #[test]
 fn export_as_writes_only_the_chosen_artboard_in_every_format() {
-    for (format, ellipse) in [("svg", "<path"), ("dxf", "HATCH"), ("pdf", ""), ("png", "")] {
+    for (format, ellipse) in [("svg", "<ellipse"), ("dxf", "HATCH"), ("pdf", ""), ("png", "")] {
         for (range, on) in [("1", true), ("3", false)] {
             let (mut app, written) = app(3);
             app.run("file.exportAs", json!({"format": format})).unwrap();
@@ -265,4 +310,43 @@ fn export_as_writes_only_the_chosen_artboard_in_every_format() {
             }
         }
     }
+}
+
+/// The Enter that closed the save panel, still held as the format's options open, doesn't write
+/// the file; Enter pressed again after it is let go does. So for every options dialog Export As
+/// opens after its panel, an exporter plug-in's included (as Save As's options).
+#[test]
+fn the_enter_that_closed_the_save_panel_does_not_confirm_the_options() {
+    let params = r#"{"speed":{"type":"number","min":1,"max":100,"default":40}}"#;
+    let module = wat::parse_str(vectorz_plugins::wat::returning(
+        &vectorz_plugins::wat::exporter("test.ui.held", r#"["tuh"]"#, params),
+        r#"{"dataBase64":"SGk="}"#,
+    ))
+    .unwrap();
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    let ctx = egui::Context::default();
+    theme::install_fonts(&ctx);
+    let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
+        let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
+    };
+    // Each format whose options follow the panel (PDF's with Use Artboards: Save PDF).
+    let formats = [("png", false), ("svg", false), ("pdf", true), ("txt", false), ("dxf", false), ("eps", false), ("plugin.test.ui.held", false)];
+    for (format, artboards) in formats {
+        let (mut app, written) = app(1);
+        app.run("plugin.install", json!({"dataBase64": vectorz_format::base64_encode(&module)})).unwrap();
+        app.run("file.exportAs", json!({"format": format})).unwrap();
+        set(&mut app, "useArtboards", json!(artboards));
+        confirm(&mut app).unwrap();
+        let options = kind(&app).map(str::to_string);
+        assert!(options.as_deref().is_some_and(|k| k != "exportAs"), "{format}: its options follow the panel, not {options:?}");
+        frame(&mut app, vec![enter(true)]);
+        assert_eq!(kind(&app).map(str::to_string), options, "{format}: the Enter still held isn't the options'");
+        assert!(written.borrow().is_empty(), "{format}: nothing written");
+        frame(&mut app, vec![enter(false)]);
+        frame(&mut app, vec![enter(true)]);
+        assert!(app.ui.dialog.is_none(), "{format}: Enter pressed again confirms");
+        assert!(!written.borrow().is_empty(), "{format}: and writes");
+    }
+    vectorz_plugins::registry::remove("test.ui.held");
 }
