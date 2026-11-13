@@ -13,7 +13,7 @@ workspace = true
 vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
-vectorz-engine = { workspace = true }
+vectorz-engine = { workspace = true, features = ["bundled-fonts"] }
 vectorz-render = { workspace = true }
 vectorz-format = { workspace = true }
 vectorz-svg = { workspace = true }

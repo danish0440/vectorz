@@ -3,7 +3,7 @@ name = "vectorz-metafile"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorZ Windows metafiles: hand-written EMF and WMF writers and readers"
+description = "VectorZ metafiles: hand-written EMF and WMF writers and readers, and a QuickDraw picture (PICT) reader"
 
 [lints]
 workspace = true

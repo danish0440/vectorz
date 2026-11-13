@@ -125,12 +125,19 @@ pub fn oversized_tiff(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The color type of TIFF `bytes` and its decoder; `None` for [`oversized_tiff`] images too.
-fn tiff(bytes: &[u8]) -> Option<(tiff::ColorType, tiff::decoder::Decoder<Cursor<&[u8]>>)> {
+pub(crate) fn tiff(bytes: &[u8]) -> Option<(tiff::ColorType, tiff::decoder::Decoder<Cursor<&[u8]>>)> {
     if !is_tiff(bytes) || oversized_tiff(bytes).is_some() {
         return None;
     }
     let mut d = tiff::decoder::Decoder::new(Cursor::new(bytes)).ok()?;
     Some((d.colortype().ok()?, d))
+}
+
+/// The Orientation tag of TIFF `bytes`' first image, of any unsigned type; `None` for other images
+/// and TIFFs without one. Reads only its header.
+pub fn tiff_orientation(bytes: &[u8]) -> Option<u16> {
+    let (_, mut d) = tiff(bytes)?;
+    d.find_tag_unsigned::<u16>(tiff::tags::Tag::Orientation).ok().flatten()
 }
 
 /// Does the TIFF `d` reads store one plane per channel (PlanarConfiguration 2)?
@@ -143,7 +150,7 @@ fn planar(d: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> bool {
 /// stores each pixel's samples together or one plane per channel. `None` when they don't decode to
 /// that many samples, which includes images whose planes together need more than the decoder's
 /// limit (256 MB of samples).
-fn read_samples(d: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, n: usize, per: usize) -> Option<Vec<u8>> {
+pub(crate) fn read_samples(d: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, n: usize, per: usize) -> Option<Vec<u8>> {
     let mut buf = tiff::decoder::DecodingResult::U8(Vec::new());
     let layout = d.read_image_to_buffer(&mut buf).ok()?;
     let data = match buf {
@@ -193,6 +200,24 @@ impl ImageBlob {
     /// header.
     pub fn is_cmyk(&self) -> bool {
         jpeg_components(&self.bytes) == Some(4) || tiff(&self.bytes).is_some_and(|(t, _)| matches!(t, tiff::ColorType::CMYK(8 | 16)))
+    }
+
+    /// Does the image hold CMYK samples of 16 bits (a CMYK TIFF), which [`Self::cmyk`] gives at 8
+    /// bits? Reads only its header.
+    pub fn is_cmyk16(&self) -> bool {
+        tiff(&self.bytes).is_some_and(|(t, _)| matches!(t, tiff::ColorType::CMYK(16)))
+    }
+
+    /// The width and height a JPEG or TIFF says it has, for any color type. Reads only its header.
+    pub fn header_size(&self) -> Option<(u32, u32)> {
+        let bytes = self.bytes.as_slice();
+        if bytes.starts_with(&[0xFF, 0xD8]) {
+            let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), DecoderOptions::default());
+            d.decode_headers().ok()?;
+            let (w, h) = d.dimensions()?;
+            return Some((u32::try_from(w).ok()?, u32::try_from(h).ok()?));
+        }
+        tiff(bytes).and_then(|(_, mut d)| d.dimensions().ok())
     }
 
     /// The ink amounts of a CMYK image; `None` for other images, and ones that can't be decoded
@@ -291,10 +316,10 @@ fn tiff_inks(bytes: &[u8]) -> Option<Inks> {
     Inks::new(w, h, read_samples(&mut d, n, 4)?)
 }
 
-/// CMYK TIFF `bytes` as Open and Place store them: as they are, or, when they store one plane per
-/// ink, which the image decoder doesn't read, their ink amounts written again by
-/// [`ImageBlob::cmyk_tiff_at`] with the resolution `ppi`. `None` for other images and for CMYK
-/// TIFFs whose inks [`ImageBlob::cmyk`] doesn't read.
+/// CMYK TIFF `bytes` that no orientation turns ([`turned_cmyk`] stores the others) as Open and
+/// Place store them: as they are, or, when they store one plane per ink, which the image decoder
+/// doesn't read, their ink amounts written again by [`ImageBlob::cmyk_tiff_at`] with the resolution
+/// `ppi`. `None` for other images and for CMYK TIFFs whose inks [`ImageBlob::cmyk`] doesn't read.
 pub fn stored_cmyk_tiff(bytes: &[u8], ppi: Option<(f64, f64)>) -> Option<Vec<u8>> {
     let inks = tiff_inks(bytes)?;
     let (_, mut d) = tiff(bytes)?;
@@ -302,6 +327,21 @@ pub fn stored_cmyk_tiff(bytes: &[u8], ppi: Option<(f64, f64)>) -> Option<Vec<u8>
         return Some(bytes.to_vec());
     }
     ImageBlob::cmyk_tiff_at(&inks, ppi).map(|b| Arc::unwrap_or_clone(b.bytes))
+}
+
+/// CMYK JPEG or TIFF `bytes` that `orientation` turns or flips, as Open and Place store them: their
+/// ink amounts ([`ImageBlob::cmyk`], 8 bits each) turned and written again by
+/// [`ImageBlob::cmyk_tiff_at`] with the resolution `ppi` of the turned pixels, with the turned
+/// width and height. `None` for other images and for CMYK images whose inks [`ImageBlob::cmyk`]
+/// doesn't read.
+pub fn turned_cmyk(bytes: &[u8], orientation: image::metadata::Orientation, ppi: Option<(f64, f64)>) -> Option<(Vec<u8>, (u32, u32))> {
+    let inks = if bytes.starts_with(&[0xFF, 0xD8]) { jpeg_inks(bytes) } else { tiff_inks(bytes) }?;
+    // Four 8-bit inks to a pixel, turned as four 8-bit channels are.
+    let mut px = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(inks.width, inks.height, inks.data)?);
+    px.apply_orientation(orientation);
+    let inks = Inks::new(px.width(), px.height(), px.into_bytes())?;
+    let tiff = ImageBlob::cmyk_tiff_at(&inks, ppi)?;
+    Some((Arc::unwrap_or_clone(tiff.bytes), (inks.width, inks.height)))
 }
 
 /// A TIFF whose pixels have samples after their colour, which the image decoder doesn't read at
@@ -631,6 +671,38 @@ mod tests {
         // Every image reader sees an RGB image: cyan is (0, 255, 255).
         let rgb = image::load_from_memory(&b.bytes).unwrap().to_rgb8();
         assert_eq!(rgb.get_pixel(1, 0).0, [0, 255, 255]);
+    }
+
+    #[test]
+    fn a_header_gives_the_size_without_the_samples() {
+        assert_eq!(ImageBlob::cmyk_tiff(&inks()).unwrap().header_size(), Some((3, 2)));
+        // A CMYK TIFF of 6000 × 6000 pixels whose samples aren't there.
+        let mut t = b"II*\0\x08\0\0\0\x07\0".to_vec();
+        // Bits per sample: four values, after the entries (8 + 2 + 7 × 12 + 4 = 98).
+        let entries = [
+            (256u16, 4u16, 1u32, 6000u32),
+            (257, 4, 1, 6000),
+            (258, 3, 4, 98),
+            (262, 3, 1, 5),
+            (273, 4, 1, 106),
+            (277, 3, 1, 4),
+            (279, 4, 1, 144_000_000),
+        ];
+        for (tag, kind, count, value) in entries {
+            t.extend_from_slice(&tag.to_le_bytes());
+            t.extend_from_slice(&kind.to_le_bytes());
+            t.extend_from_slice(&count.to_le_bytes());
+            t.extend_from_slice(&value.to_le_bytes());
+        }
+        t.extend_from_slice(&0u32.to_le_bytes());
+        t.extend_from_slice(&[8, 0, 8, 0, 8, 0, 8, 0]);
+        let big = ImageBlob::new("image/tiff", t);
+        assert!(big.is_cmyk());
+        assert_eq!(big.header_size(), Some((6000, 6000)));
+        assert_eq!(big.cmyk(), None);
+        let mut png = Vec::new();
+        image::RgbaImage::new(2, 2).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        assert_eq!(ImageBlob::png(png).header_size(), None, "not a JPEG or TIFF");
     }
 
     #[test]

@@ -91,6 +91,12 @@ pub const OPTIONS: &[FormatOption] = &[
         description: "embed the fonts type uses as @font-face, subset to the characters used (whole when the font's licence forbids subsetting, left out with a warning when it forbids embedding)",
     },
     FormatOption {
+        name: "variableData",
+        ty: "boolean",
+        default: "false",
+        description: "Include Variable Data: write the text variables, the data sets and the type object each text variable is bound to as a variable library (variableSets) that document.open and variable.loadLibrary read back; variables of other kinds, and what is past the limits variable.loadLibrary reads (256 text variables, 1,000 data sets, 8 MiB), are left out with a warning",
+    },
+    FormatOption {
         name: "svg",
         ty: "object",
         default: "null",
@@ -120,7 +126,9 @@ pub fn options_map(p: &Value) -> Result<Map<String, Value>, String> {
     match o.get("svg") {
         None | Some(Value::Null) => {}
         Some(Value::Object(svg)) => m.extend(svg.clone()),
-        Some(_) => return Err("`svg` must be an object of SVG options (see document.formats)".into()),
+        Some(_) => {
+            return Err("`svg` must be an object of SVG options (see document.formats)".into());
+        }
     }
     Ok(m)
 }
@@ -147,6 +155,17 @@ fn plan(doc: &Document, p: &Value) -> Result<(ExportOptions, Vec<Option<usize>>,
     Ok((opts, named.unwrap_or_else(|| vec![0]).into_iter().map(Some).collect(), chosen))
 }
 
+/// What a save of `doc` as SVG (format `label`) with options `p` loses of several artboards: the
+/// file is one artboard and reopens as one, unless it carries the native document (Preserve
+/// Editing Capabilities).
+pub(super) fn lost_artboards_warning(doc: &Document, p: &Value, label: &str) -> Option<String> {
+    let n = doc.artboards.len();
+    let preserved = plan(doc, p).is_ok_and(|(opts, ..)| opts.preserve_editing);
+    (n > 1 && !preserved).then(|| {
+        format!("{label} keeps 1 of the document's {n} artboards: the file reopens with one. Turn on Preserve Editing Capabilities to keep them all.")
+    })
+}
+
 /// Encode `doc` as SVG (or gzipped, SVGZ): one file per chosen artboard, with the images they
 /// link to and the writer's warnings.
 pub(super) fn encode(doc: &Document, p: &Value, compressed: bool) -> Result<Encoded, String> {
@@ -156,19 +175,24 @@ pub(super) fn encode(doc: &Document, p: &Value, compressed: bool) -> Result<Enco
     // Draw linked files as vectors when available, or their previews with a warning. Keep
     // that preparation out of the native attachment so missing links remain relinkable.
     let (full, warnings) = crate::cmd::place::document::full_documents(doc);
-    let doc = &*full;
+    // The artboards' background colors, behind the art (the editing data keeps them as colors).
+    let filled = super::export::with_artboard_fills(&full, p, boards.iter().flatten().copied())?;
+    let doc = &*filled;
     // A chosen artboard's file holds the art over it; otherwise the file holds all of it.
     let regions: Option<Vec<vectorz_geom::Rect>> =
         chosen.then(|| boards.iter().flatten().filter_map(|b| doc.artboards.get(*b)).map(|a| a.rect).collect());
     let overflow = crate::cmd::fonts::export_overflow_warning(doc, &doc.layers, regions.as_deref());
-    // SVG has no filters for the Photoshop-style effects: their objects go in as images.
-    let flat = crate::cmd::rasterfx::flatten_pixel_effects(doc);
+    // Render effects SVG cannot represent faithfully, including source-model Darkness shadows.
+    let flat = crate::cmd::rasterfx::flatten_pixel_effects_for(doc, opts.profile != vectorz_svg::Profile::Tiny12);
     let doc = flat.as_ref().unwrap_or(doc);
     let mut enc = Encoded { warnings, ..Encoded::default() };
+    // One renderer measures the art over every artboard: each 3D solid is built once.
+    let mut renderer = vectorz_render::Renderer::new();
     for artboard in boards {
-        // A chosen artboard's file holds the art over it (#550).
-        let over = artboard.filter(|_| chosen).and_then(|b| doc.artboards.get(b)).map(|a| super::export::art_over(doc, a.rect));
-        let mut out = vectorz_svg::export_full(over.as_ref().unwrap_or(doc), &ExportOptions { artboard, ..opts.clone() }, native.as_deref());
+        // A chosen artboard's file holds the art over it (#550) and is named after it (#3544).
+        let over = artboard.filter(|_| chosen).and_then(|b| doc.artboards.get(b)).map(|a| super::export::art_over(doc, a.rect, &mut renderer));
+        let file = ExportOptions { artboard, artboard_title: chosen, ..opts.clone() };
+        let mut out = vectorz_svg::export_full(over.as_ref().unwrap_or(doc), &file, native.as_deref());
         let bytes = out.take_bytes();
         for l in out.linked {
             if !enc.linked.iter().any(|e| e.name == l.name) {
@@ -180,6 +204,7 @@ pub(super) fn encode(doc: &Document, p: &Value, compressed: bool) -> Result<Enco
                 enc.warnings.push(w);
             }
         }
+        enc.add_setting_notes(out.setting_notes);
         enc.files.push((artboard, if compressed { vectorz_svg::compress_bytes(&bytes) } else { bytes }));
     }
     // Live type names its fonts; outlines and embedded fonts are the fallback font's.

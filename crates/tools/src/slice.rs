@@ -41,9 +41,9 @@ fn has_area(r: Rect) -> bool {
 fn snap(cx: &ToolContext, p: Point) -> (Point, Vec<Overlay>) {
     let (mut q, ov) = crate::guides::snap_draw(cx, p, &[]);
     let tol = cx.tol(5.0);
+    let guides = cx.doc.ruler_guides();
     let nearest = |vertical: bool, v: f64| {
-        cx.doc
-            .guides
+        guides
             .iter()
             .filter(|g| g.vertical == vertical && (g.pos - v).abs() <= tol && cx.doc.guide_shown(g) && cx.doc.guide_passes(g, p, tol))
             .min_by(|a, b| (a.pos - v).abs().total_cmp(&(b.pos - v).abs()))
@@ -259,7 +259,7 @@ impl Tool for SliceSelectionTool {
                     }
                     out.push(Action::Begin("Move Slice".into()));
                 }
-                let d = move_delta(start, p, m.shift);
+                let d = move_delta(start, p, m.shift, cx.constrain_angle);
                 out.push(Action::Preview("object.slice.move".into(), json!({ "slices": json_ids(&ids), "dx": d.x, "dy": d.y })));
                 self.drag = Some(Drag::Move { start, ids, began: true });
                 out
@@ -326,25 +326,24 @@ impl Tool for SliceSelectionTool {
             }
         }
         o.extend(self.guides.iter().cloned());
-        // Smart Guides › Measurement Labels: the size readouts while resizing or moving slices.
-        match self.drag.as_ref().filter(|_| cx.measurement_labels) {
-            Some(Drag::Resize { id, began: true, .. }) => {
-                if let Some(r) = cx.doc.slice_bounds(*id) {
-                    o.push(Overlay::Measure {
-                        p: Point::new(r.x1, r.y1) + Vec2::new(cx.tol(12.0), cx.tol(12.0)),
-                        text: cx.size_label(r.width(), r.height()),
-                    });
-                }
-            }
-            Some(Drag::Move { ids, began: true, .. }) => {
-                if let Some(r) = ids.iter().filter_map(|id| cx.doc.slice_bounds(*id)).reduce(|a, b| a.union(b)) {
-                    o.push(Overlay::Measure {
-                        p: Point::new(r.x1, r.y1) + Vec2::new(cx.tol(12.0), cx.tol(12.0)),
-                        text: cx.size_label(r.width(), r.height()),
-                    });
-                }
-            }
-            _ => {}
+        // Smart Guides › Transform Tools: W/H while resizing; Measurement Labels: while moving.
+        if let Some(Drag::Resize { id, began: true, .. }) = self.drag.as_ref()
+            && cx.transform_tools_guides
+            && let Some(r) = cx.doc.slice_bounds(*id)
+        {
+            o.push(Overlay::Measure {
+                p: Point::new(r.x1, r.y1) + Vec2::new(cx.tol(12.0), cx.tol(12.0)),
+                text: cx.size_label(r.width(), r.height()),
+            });
+        }
+        if let Some(Drag::Move { ids, began: true, .. }) = self.drag.as_ref()
+            && cx.measurement_labels
+            && let Some(r) = ids.iter().filter_map(|id| cx.doc.slice_bounds(*id)).reduce(|a, b| a.union(b))
+        {
+            o.push(Overlay::Measure {
+                p: Point::new(r.x1, r.y1) + Vec2::new(cx.tol(12.0), cx.tol(12.0)),
+                text: cx.size_label(r.width(), r.height()),
+            });
         }
         o
     }
@@ -391,7 +390,7 @@ mod tests {
     #[test]
     fn the_slice_tool_drags_out_a_slice_in_one_undo_step() {
         let (mut d, _) = doc_with_rect();
-        d.guides.push(Guide::new(true, 403.0));
+        d.add_ruler_guide(&Guide::new(true, 403.0));
         let s = Selection::default();
         let p = paint();
         let mut c = cx(&d, &s, &p);
@@ -558,12 +557,36 @@ mod tests {
         assert!(near(resize(&neither, (60.0, 25.0), (97.0, 25.0), none), Rect::new(10.0, 10.0, 97.0, 40.0)));
         // A ruler guide at x = 98 takes the side dragged 1 px from it, over the rectangle's edge
         // 1 px the other way, with Smart Guides on or off.
-        d.guides.push(Guide::new(true, 98.0));
+        d.add_ruler_guide(&Guide::new(true, 98.0));
         for c in [cx(&d, &sel, &p), ToolContext { smart_guides: false, snap_to_point: false, ..cx(&d, &sel, &p) }] {
             assert!(near(resize(&c, (60.0, 25.0), (99.0, 25.0), none), Rect::new(10.0, 10.0, 98.0, 40.0)));
         }
         // With Snap to Grid on, the guide takes the corner's x and the grid still takes its y.
         let grid = ToolContext { snap_to_grid: true, ..cx(&d, &sel, &p) };
         assert!(near(resize(&grid, (60.0, 40.0), (99.0, 46.0), none), Rect::new(10.0, 10.0, 98.0, 45.0)));
+    }
+
+    #[test]
+    fn slice_resize_readout_honors_transform_tools_guides() {
+        let (d, a, _) = doc_with_slices();
+        let p = paint();
+        let mut sel = Selection::default();
+        sel.set_slices([a]);
+        let measures = |t: &SliceSelectionTool, c: &ToolContext| t.overlays(c).iter().filter(|o| matches!(o, Overlay::Measure { .. })).count();
+        for on in [true, false] {
+            let c = ToolContext { transform_tools_guides: on, ..cx(&d, &sel, &p) };
+            let mut t = SliceSelectionTool::default();
+            t.pointer(&c, &ev(PointerKind::Down, 60.0, 40.0));
+            t.pointer(&c, &ev(PointerKind::Drag, 80.0, 50.0));
+            assert_eq!(measures(&t, &c), usize::from(on), "transform tools {on}");
+            t.pointer(&c, &ev(PointerKind::Up, 80.0, 50.0));
+        }
+        let move_labels = ToolContext { measurement_labels: true, transform_tools_guides: false, ..cx(&d, &sel, &p) };
+        let mut t = SliceSelectionTool::default();
+        t.pointer(&move_labels, &ev(PointerKind::Down, 20.0, 20.0));
+        t.pointer(&move_labels, &ev(PointerKind::Drag, 30.0, 25.0));
+        assert_eq!(measures(&t, &move_labels), 1);
+        let no_labels = ToolContext { measurement_labels: false, transform_tools_guides: true, ..cx(&d, &sel, &p) };
+        assert_eq!(measures(&t, &no_labels), 0, "move still follows measurement labels");
     }
 }

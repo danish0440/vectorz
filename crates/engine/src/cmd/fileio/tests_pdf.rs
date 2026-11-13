@@ -56,6 +56,126 @@ fn export_pdf_writes_the_compatibility_header_and_the_range() {
     assert!(b64(&v).starts_with(b"%PDF-1.6"));
 }
 
+/// `useArtboards: false` writes one page, the bounds of the visible art, as `document.export`
+/// does, whatever artboards are chosen. Art longer than 200 in keeps its size with
+/// `longPagesInPoints`. A document with no visible art and a value that isn't a boolean are
+/// refused.
+#[test]
+fn use_artboards_false_writes_one_page_of_the_arts_bounds() {
+    let mut s = session(3);
+    let page = |bytes: &[u8]| {
+        let d = vectorz_pdf::import(bytes).unwrap();
+        (d.artboards.len(), d.artboards[0].rect.size())
+    };
+    let through_export = page(&b64(&s.execute("document.export", &as_export(&json!({"useArtboards": false}))).unwrap()));
+    assert!(through_export.0 == 1 && through_export.1.width < 50.0 && through_export.1.height < 40.0, "{through_export:?}");
+    for p in [
+        json!({"useArtboards": false}),
+        json!({"useArtboards": false, "range": "2"}),
+        json!({"useArtboards": false, "artboards": [0, 1]}),
+        json!({"useArtboards": false, "artboard": 2}),
+    ] {
+        assert_eq!(page(&b64(&export(&mut s, p.clone()))), through_export, "{p}");
+    }
+    assert_eq!(pages(&b64(&export(&mut s, json!({"useArtboards": true})))), 3);
+    assert_eq!(pages(&b64(&export(&mut s, json!({"useArtboards": null})))), 3);
+
+    // A 10 m drawing on a small artboard: its page is 10 m long, in points.
+    s.execute("shape.rectangle", &json!({"x": 0, "y": 200, "width": 28_346.46, "height": 100})).unwrap();
+    let v = export(&mut s, json!({"useArtboards": false, "longPagesInPoints": true}));
+    let pdf = b64(&v);
+    let (n, size) = page(&pdf);
+    assert!(n == 1 && size.width > 28_346.0 && size.width < 28_350.0, "{size:?}");
+    assert!(!String::from_utf8_lossy(&pdf).contains("/UserUnit"));
+    assert!(warnings(&v).iter().any(|w| w.contains("written without a UserUnit, in points")), "{v}");
+    // The Summary's export in memory writes the same page.
+    let mut long = |p: Value| warnings(&s.execute("document.pdfSettings", &p).unwrap()).iter().any(|w| w.contains("longer than PDF's page limit"));
+    assert!(long(json!({"includeDocument": true, "useArtboards": false})));
+    assert!(!long(json!({"includeDocument": true})), "the artboards are small");
+    let e = s.execute("document.pdfSettings", &json!({"useArtboards": "no"})).unwrap_err();
+    assert!(matches!(e, crate::EngineError::BadParams { .. }), "without includeDocument too: {e}");
+
+    s.execute("select.all", &json!({})).unwrap();
+    s.execute("edit.clear", &json!({})).unwrap();
+    for p in [json!({"useArtboards": false}), json!({"useArtboards": "no"})] {
+        let e = s.execute("document.exportPdf", &p).unwrap_err();
+        assert!(matches!(e, crate::EngineError::BadParams { .. }), "{p}: {e}");
+    }
+}
+
+/// A PDF of the art's bounds carries no Preserve Editing data, through `document.exportPdf`,
+/// `document.export` and the Summary's export in memory, and says so in a warning: reopened, its
+/// editing data would replace the document's artboards with the one around the art. A PDF of the
+/// artboards keeps the data, and it reopens with every artboard. With Preserve Editing off, there
+/// is no warning.
+#[test]
+fn a_pdf_of_the_arts_bounds_carries_no_editing_data() {
+    let mut s = session(3);
+    let left_out = |v: &Value| warnings(v).iter().any(|w| w == super::pdf::EDITING_NEEDS_THE_ARTBOARDS);
+    let art = json!({"useArtboards": false});
+    for v in [export(&mut s, art.clone()), s.execute("document.export", &as_export(&art)).unwrap()] {
+        let pdf = b64(&v);
+        assert!(vectorz_pdf::editing(&pdf).is_none(), "{:?}", warnings(&v));
+        assert!(left_out(&v), "{:?}", warnings(&v));
+        assert_eq!(pages(&pdf), 1);
+    }
+    let summary = s.execute("document.pdfSettings", &json!({"includeDocument": true, "useArtboards": false})).unwrap();
+    assert!(left_out(&summary), "{summary}");
+    let quiet = export(&mut s, json!({"useArtboards": false, "preserveEditing": false}));
+    assert!(!left_out(&quiet), "{:?}", warnings(&quiet));
+
+    for v in [export(&mut s, json!({})), export(&mut s, json!({"useArtboards": true}))] {
+        let editing = vectorz_pdf::editing(&b64(&v)).expect("editing data");
+        let reopened = vectorz_format::load(&editing.data).unwrap();
+        assert_eq!(reopened.artboards.len(), 3);
+        assert!(!left_out(&v), "{:?}", warnings(&v));
+    }
+}
+
+/// While an opacity mask is edited, a PDF of the art's bounds measures the art without the
+/// editing layer, as `document.export` does: a mask shape drawn past the masked object doesn't
+/// widen the page.
+#[test]
+fn a_pdf_of_the_art_leaves_out_the_mask_editing_layer() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 300, "height": 300})).unwrap();
+    let obj = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 200, "height": 200})).unwrap()["id"].clone();
+    let mask = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 200})).unwrap()["id"].clone();
+    s.execute("paint.setFill", &json!({"color": "#ffffff", "ids": [mask]})).unwrap();
+    s.execute("select.set", &json!({"ids": [obj, mask]})).unwrap();
+    s.execute("transparency.makeOpacityMask", &json!({})).unwrap();
+    s.execute("transparency.editOpacityMask", &json!({})).unwrap();
+    s.execute("shape.ellipse", &json!({"x": 250, "y": 250, "width": 40, "height": 40})).unwrap();
+    assert!(s.doc().unwrap().doc.mask_edit.is_some());
+    let width = |bytes: &[u8]| vectorz_pdf::import(bytes).unwrap().artboards[0].rect.width();
+    let through_export = width(&b64(&s.execute("document.export", &as_export(&json!({"useArtboards": false}))).unwrap()));
+    assert!(through_export < 250.0, "{through_export}");
+    assert_eq!(width(&b64(&export(&mut s, json!({"useArtboards": false})))), through_export);
+}
+
+/// While an opacity mask is edited, a PDF of the artboards leaves out the editing layer too, as
+/// `document.export` does: from the drawn page and from the Preserve Editing data.
+#[test]
+fn a_pdf_of_the_artboards_leaves_out_the_mask_editing_layer() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 300, "height": 300})).unwrap();
+    let obj = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 200, "height": 200})).unwrap()["id"].clone();
+    let mask = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 200})).unwrap()["id"].clone();
+    s.execute("paint.setFill", &json!({"color": "#ffffff", "ids": [mask]})).unwrap();
+    s.execute("select.set", &json!({"ids": [obj, mask]})).unwrap();
+    s.execute("transparency.makeOpacityMask", &json!({})).unwrap();
+    s.execute("transparency.editOpacityMask", &json!({})).unwrap();
+    s.execute("shape.ellipse", &json!({"x": 250, "y": 250, "width": 40, "height": 40})).unwrap();
+    assert!(s.doc().unwrap().doc.mask_edit.is_some());
+    let nodes = |bytes: &[u8]| vectorz_pdf::import(bytes).unwrap().node_count();
+    let plain = json!({"preserveEditing": false});
+    let through_export = nodes(&b64(&s.execute("document.export", &as_export(&plain)).unwrap()));
+    assert_eq!(nodes(&b64(&export(&mut s, plain))), through_export, "the drawn page");
+    let layers = |v: &Value| vectorz_format::load(&vectorz_pdf::editing(&b64(v)).unwrap().data).unwrap().layers;
+    let through_export = layers(&s.execute("document.export", &as_export(&json!({}))).unwrap());
+    assert_eq!(layers(&export(&mut s, json!({}))), through_export, "the Preserve Editing data");
+}
+
 #[test]
 fn bad_options_are_refused() {
     let mut s = session(2);
@@ -129,6 +249,32 @@ fn options_not_applied_yet_and_document_features_warn() {
     assert!(knockout(warnings(&s.execute("document.export", &as_export(&json!({}))).unwrap())));
     // Other formats have none.
     assert!(warnings(&s.execute("document.export", &json!({"format": "png"})).unwrap()).is_empty());
+}
+
+/// A placed 16-bit PNG is written at 8 bits a sample in PDF 1.3 and 1.4 files (PDF/X-3 and the
+/// pages of a .ai file too), and keeps 16 bits from PDF 1.5.
+#[test]
+fn a_16_bit_png_is_written_at_8_bits_before_pdf_1_5() {
+    let mut s = session(1);
+    let deep = image::ImageBuffer::from_fn(8, 8, |x, y| image::Rgb([x as u16 * 8000, y as u16 * 8000, 40000]));
+    let mut png = vec![];
+    image::DynamicImage::ImageRgb16(deep).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    s.execute("file.place", &json!({"name": "deep.png", "dataBase64": vectorz_format::base64_encode(&png), "at": [50, 40]})).unwrap();
+    let readable = json!({"compressText": false});
+    for (cmd, p, depth) in [
+        ("document.exportPdf", json!({"compatibility": "1.3", "compression": readable}), 8),
+        ("document.exportPdf", json!({"compatibility": "1.4", "compression": readable}), 8),
+        ("document.exportPdf", json!({"standard": "pdfX3", "compression": readable}), 8),
+        ("file.saveCopy", json!({"format": "ai", "compatibility": "1.4", "compress": false}), 8),
+        ("document.exportPdf", json!({"compatibility": "1.5", "compression": readable}), 16),
+        ("document.exportPdf", json!({"compression": readable}), 16),
+    ] {
+        let v = s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"));
+        let text = String::from_utf8_lossy(&b64(&v)).into_owned();
+        let (eight, sixteen) = (text.contains("/BitsPerComponent 8"), text.contains("/BitsPerComponent 16"));
+        assert_eq!((eight, sixteen), (depth == 8, depth == 16), "{cmd} {p}");
+        assert!(warnings(&v).iter().all(|w| !w.contains("decoded")), "{cmd} {p}: {}", v["warnings"]);
+    }
 }
 
 /// A placed image whose pixel data can't be decoded is left out of every PDF the engine writes,

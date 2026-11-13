@@ -96,16 +96,31 @@ fn answer(code: u32, results: &HashMap<String, OwnedValue>) -> Result<Option<Sav
         .map_err(|e: zbus::zvariant::Error| e.to_string())?;
     let uri = uris.first().ok_or("no file in the portal's answer")?;
     let path = file_uri_path(uri).ok_or_else(|| format!("not a local file: {uri}"))?;
-    let filter = results.get("current_filter").and_then(|v| {
-        let (label, _globs): (String, Vec<(u32, String)>) = v.try_clone().ok()?.try_into().ok()?;
-        Some(label)
-    });
+    // A name that isn't UTF-8 can't be written as picked: replacing its bytes would save over (and
+    // ask to replace) another file. The dialog ends without a file instead.
+    let Ok(path) = String::from_utf8(path) else {
+        log::warn!("the portal's save dialog picked a file name that isn't UTF-8: nothing is saved");
+        return Ok(None);
+    };
+    let filter = results.get("current_filter").and_then(|v| filter_label(v));
     Ok(Some(Saved { path, filter }))
 }
 
-/// `file:///home/me/A%20b.svg` → `/home/me/A b.svg`; `None` for a file elsewhere (`file://host/`)
-/// or another scheme.
-fn file_uri_path(uri: &str) -> Option<String> {
+/// The label of a file type as the portal sends it, a `(sa(us))` structure; `None` for a value of
+/// another shape.
+fn filter_label(value: &Value<'_>) -> Option<String> {
+    match value {
+        Value::Structure(s) => match s.fields() {
+            [Value::Str(label), Value::Array(globs)] if globs.element_signature() == "(us)" => Some(label.to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `file:///home/me/A%20b.svg` → `/home/me/A b.svg` (its bytes); `None` for a file elsewhere
+/// (`file://host/`) or another scheme.
+fn file_uri_path(uri: &str) -> Option<Vec<u8>> {
     let rest = uri.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
     if !rest.starts_with('/') {
@@ -126,8 +141,7 @@ fn file_uri_path(uri: &str) -> Option<String> {
             }
         }
     }
-    // `show_dialog` makes rfd's path a string with `to_string_lossy` too.
-    Some(String::from_utf8_lossy(&out).into_owned())
+    Some(out)
 }
 
 /// `saved` as the answer of the save dialog for `request`: the path, then the first extension of
@@ -169,28 +183,37 @@ pub fn pick(pick: &FilePick, window: Option<&winit::window::Window>) -> Option<V
 fn save_file(conn: &zbus::blocking::Connection, request: &SaveRequest) -> Result<Option<Saved>, String> {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use zbus::blocking::Proxy;
+    use zbus::blocking::{MessageIterator, Proxy};
     use zbus::zvariant::OwnedObjectPath;
 
     const DESKTOP: &str = "org.freedesktop.portal.Desktop";
     const REQUEST: &str = "org.freedesktop.portal.Request";
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let sender = conn.unique_name().ok_or("no name on the session bus")?.as_str().trim_start_matches(':').replace('.', "_");
     let token = format!("vectorz_save_{}_{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
-    let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-    // Listen before asking, so that an answer that comes at once is not missed.
-    let mut replies = Proxy::new(conn, DESKTOP, path.as_str(), REQUEST).and_then(|p| p.receive_signal("Response")).map_err(|e| e.to_string())?;
+    // Listen before asking, on every request path: a portal older than version 0.9 ignores
+    // `handle_token` and answers on the request path it returns, and its answer can come before
+    // the call's reply. The stream keeps every `Response` from the time it is made.
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(DESKTOP)
+        .and_then(|b| b.interface(REQUEST))
+        .and_then(|b| b.member("Response"))
+        .map_err(|e| e.to_string())?
+        .build();
+    let responses = MessageIterator::for_match_rule(rule, conn, None).map_err(|e| e.to_string())?;
     let chooser = Proxy::new(conn, DESKTOP, "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser").map_err(|e| e.to_string())?;
     // The title is empty, as rfd sends it for a save.
-    let handle: OwnedObjectPath = chooser.call("SaveFile", &(request.parent.as_str(), "", options(request, &token))).map_err(|e| e.to_string())?;
-    // A portal older than version 0.9 ignores `handle_token` and answers on the request path it
-    // returns.
-    let reply = if handle.as_str() == path {
-        replies.next()
-    } else {
-        Proxy::new(conn, DESKTOP, handle.as_str(), REQUEST).and_then(|p| p.receive_signal("Response")).map_err(|e| e.to_string())?.next()
-    }
-    .ok_or("the save dialog closed without an answer")?;
+    let call = chooser.call_method("SaveFile", &(request.parent.as_str(), "", options(request, &token))).map_err(|e| e.to_string())?;
+    let handle: OwnedObjectPath = call.body().deserialize().map_err(|e| e.to_string())?;
+    // The answer is the `Response` on the path returned, from the connection that returned it.
+    let portal = call.header().sender().map(|s| s.as_str().to_string());
+    let reply = responses
+        .filter_map(Result::ok)
+        .find(|m| {
+            let header = m.header();
+            header.path().map(|p| p.as_str()) == Some(handle.as_str()) && header.sender().map(|s| s.as_str()) == portal.as_deref()
+        })
+        .ok_or("the save dialog closed without an answer")?;
     let (code, results): (u32, HashMap<String, OwnedValue>) = reply.body().deserialize().map_err(|e| e.to_string())?;
     answer(code, &results)
 }
@@ -217,6 +240,13 @@ fn parent(window: &winit::window::Window) -> (String, Option<wayland::Export>) {
         Some(export) => (format!("wayland:{}", export.handle), Some(export)),
         None => (String::new(), None),
     }
+}
+
+/// [`parent`] for another dialog of the portal (the screen color sampler, `linux_screen_color`):
+/// the identifier stays valid until the second value is dropped.
+#[cfg(target_os = "linux")]
+pub(crate) fn exported_parent(window: &winit::window::Window) -> (String, impl Send + 'static) {
+    parent(window)
 }
 
 /// The portal's identifier of `window`: its X11 id, else empty (no Wayland export is made off
@@ -326,7 +356,11 @@ mod tests {
         let pick = FilePick {
             name: "Untitled-1.vectorz".into(),
             folder: Some("/home/me/Art".into()),
-            filters: vec![("VectorZ", &["vectorz"]), ("SVG", &["svg"]), ("PDF-compatible .ai", &["ai"])],
+            filters: vec![
+                FilePick::filter("VectorZ", &["vectorz"]),
+                FilePick::filter("SVG", &["svg"]),
+                FilePick::filter("PDF-compatible .ai", &["ai"]),
+            ],
         };
         SaveRequest::new(&pick, "x11:3a0000f".into())
     }
@@ -378,6 +412,36 @@ mod tests {
         assert_eq!(pick_answer(saved, &request), ["/home/me/Art/poster"]);
     }
 
+    /// A `current_filter` of another shape than `(sa(us))` (a structure with fewer, other or more
+    /// fields, a string) gives the path alone; `uris` of another shape is an error.
+    #[test]
+    fn an_answer_of_another_shape_is_not_read() {
+        let malformed = [
+            Value::from(("SVG".to_string(),)),
+            Value::from(("SVG".to_string(), vec![(0u32,)])),
+            Value::from(("SVG".to_string(), vec![("*.svg".to_string(), 0u32)])),
+            Value::from((1u32, vec![(0u32, "*.svg".to_string())])),
+            Value::from(("SVG".to_string(), vec![(0u32, "*.svg".to_string())], 1u32)),
+            Value::from("SVG"),
+        ];
+        for filter in malformed {
+            let mut r = results("file:///tmp/card", None);
+            r.insert("current_filter".to_string(), OwnedValue::try_from(filter).unwrap());
+            assert_eq!(answer(0, &r), Ok(Some(Saved { path: "/tmp/card".into(), filter: None })));
+        }
+        let malformed = [
+            Value::from(vec![1u32]),
+            Value::from(vec![("file:///tmp/card".to_string(),)]),
+            Value::from(Vec::<String>::new()),
+            Value::from("file:///tmp/card"),
+        ];
+        for uris in malformed {
+            let mut r = HashMap::new();
+            r.insert("uris".to_string(), OwnedValue::try_from(uris).unwrap());
+            assert!(answer(0, &r).is_err());
+        }
+    }
+
     /// Cancel (1) and a dialog closed another way (2) answer no file; an answer without a local file
     /// is an error, and rfd shows the dialog instead.
     #[test]
@@ -393,6 +457,7 @@ mod tests {
 
     #[test]
     fn file_uris_become_local_paths() {
+        let file_uri_path = |uri: &str| super::file_uri_path(uri).map(|b| String::from_utf8(b).unwrap());
         assert_eq!(file_uri_path("file:///home/me/Untitled-1.vectorz").as_deref(), Some("/home/me/Untitled-1.vectorz"));
         assert_eq!(file_uri_path("file:///home/me/A%20b%C3%A9.svg").as_deref(), Some("/home/me/A bé.svg"));
         assert_eq!(file_uri_path("file://localhost/tmp/x.pdf").as_deref(), Some("/tmp/x.pdf"));
@@ -400,6 +465,9 @@ mod tests {
         assert_eq!(file_uri_path("file:///tmp/100%+1%2").as_deref(), Some("/tmp/100%+1%2"));
         assert_eq!(file_uri_path("file://host/x.svg"), None);
         assert_eq!(file_uri_path("sftp://host/x.svg"), None);
+        // Not UTF-8: the bytes as they are, which `answer` refuses rather than changing them.
+        assert_eq!(super::file_uri_path("file:///tmp/a%FF.svg"), Some(b"/tmp/a\xff.svg".to_vec()));
+        assert!(matches!(answer(0, &results("file:///tmp/a%FF.svg", None)), Ok(None)));
     }
 
     #[test]
@@ -416,20 +484,34 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
     type Seen = std::sync::Arc<std::sync::Mutex<Vec<(Option<String>, Option<String>)>>>;
 
-    /// A session bus of its own (`dbus-daemon`) with a mock `org.freedesktop.portal.FileChooser`
-    /// that answers `SaveFile` from `script`, as PhotoZ's portal tests run it. With `own_paths`
-    /// it is a portal older than 0.9, which answers on a request path of its own. `None` when there
-    /// is no `dbus-daemon` to run.
+    /// How the mock portal answers `SaveFile`.
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
-    fn mock_portal(script: Script, own_paths: bool) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Portal {
+        /// On the request path that `handle_token` names, after its reply.
+        Current,
+        /// As a portal older than 0.9: on a request path of its own, 300 ms after its reply, as a
+        /// person answers the dialog.
+        Old,
+        /// As `Old`, with the `Response` sent before the reply that names its path.
+        OldEarly,
+    }
+
+    /// A session bus of its own (`dbus-daemon`) with a mock `org.freedesktop.portal.FileChooser`
+    /// that answers `SaveFile` from `script` as `portal` says, as PhotoZ's portal tests run it.
+    /// `None` when there is no `dbus-daemon` to run.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    fn mock_portal(script: Script, portal: Portal) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
         use std::io::BufRead as _;
 
         use zbus::zvariant::OwnedObjectPath;
-        let mut daemon = std::process::Command::new("dbus-daemon")
+        let spawning = crate::spawning();
+        let daemon = std::process::Command::new("dbus-daemon")
             .args(["--session", "--nofork", "--print-address=1"])
             .stdout(std::process::Stdio::piped())
-            .spawn()
-            .ok()?;
+            .spawn();
+        drop(spawning);
+        let mut daemon = daemon.ok()?;
         let mut address = String::new();
         std::io::BufReader::new(daemon.stdout.take()?).read_line(&mut address).ok()?;
         let address = address.trim().to_string();
@@ -437,9 +519,12 @@ mod tests {
             zbus::blocking::connection::Builder::address(address.as_str()).ok()?.name("org.freedesktop.portal.Desktop").ok()?.build().ok()?;
         let seen = Seen::default();
         let log = seen.clone();
+        // Made before the client exists: the connection drops a call that comes while no stream
+        // reads it.
+        let incoming = zbus::blocking::MessageIterator::from(&server);
         std::thread::spawn(move || {
             let mut script = script.into_iter();
-            for msg in zbus::blocking::MessageIterator::from(&server) {
+            for msg in incoming {
                 let Ok(msg) = msg else { break };
                 let header = msg.header();
                 if header.message_type() != zbus::message::Type::MethodCall || header.member().map(|m| m.as_str()) != Some("SaveFile") {
@@ -447,25 +532,18 @@ mod tests {
                 }
                 let Ok((_parent, _title, options)) = msg.body().deserialize::<(String, String, HashMap<String, OwnedValue>)>() else { break };
                 let text = |key: &str| options.get(key).and_then(|v| String::try_from(v.try_clone().ok()?).ok());
-                let filter = options.get("current_filter").and_then(|v| {
-                    let (label, _): (String, Vec<(u32, String)>) = v.try_clone().ok()?.try_into().ok()?;
-                    Some(label)
-                });
+                let filter = options.get("current_filter").and_then(|v| filter_label(v));
                 let calls = log.lock().map(|mut l| {
                     l.push((text("current_name"), filter));
                     l.len()
                 });
                 let Some(sender) = header.sender().map(|s| s.as_str().trim_start_matches(':').replace('.', "_")) else { break };
-                let token = if own_paths { format!("old{}", calls.unwrap_or_default()) } else { text("handle_token").unwrap_or_default() };
+                let token = match portal {
+                    Portal::Current => text("handle_token").unwrap_or_default(),
+                    Portal::Old | Portal::OldEarly => format!("old{}", calls.unwrap_or_default()),
+                };
                 let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
                 let Ok(handle) = OwnedObjectPath::try_from(path.as_str()) else { break };
-                if server.reply(&header, &handle).is_err() {
-                    break;
-                }
-                if own_paths {
-                    // As a person answers the dialog: after the caller listened on the path returned.
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                }
                 let (code, pick) = script.next().unwrap_or((2, None));
                 let mut results: HashMap<&str, Value<'_>> = HashMap::new();
                 if let Some((uri, label)) = pick {
@@ -473,7 +551,18 @@ mod tests {
                     results.insert("current_filter", Value::from((label.to_string(), vec![(0u32, "*.x".to_string())])));
                 }
                 let to = header.sender().cloned().map(zbus::names::BusName::from);
-                if server.emit_signal(to, path.as_str(), "org.freedesktop.portal.Request", "Response", &(code, results)).is_err() {
+                let respond = || server.emit_signal(to.clone(), path.as_str(), "org.freedesktop.portal.Request", "Response", &(code, &results));
+                if portal == Portal::OldEarly && respond().is_err() {
+                    break;
+                }
+                if server.reply(&header, &handle).is_err() {
+                    break;
+                }
+                if portal == Portal::Old {
+                    // As a person answers the dialog: after the caller has the path returned.
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                if portal != Portal::OldEarly && respond().is_err() {
                     break;
                 }
             }
@@ -482,20 +571,32 @@ mod tests {
         Some((client, seen, daemon))
     }
 
+    /// [`save_file`] on `conn`, given 30 seconds to answer: an answer that is never awaited fails
+    /// the test instead of leaving it waiting.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    fn save_within(conn: &zbus::blocking::Connection, request: &SaveRequest) -> Result<Option<Saved>, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (conn, request) = (conn.clone(), request.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(save_file(&conn, &request));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30)).expect("the portal's answer was not awaited within 30 seconds")
+    }
+
     /// Through a real D-Bus: the call starts the dialog on the first file type with the suggested
     /// name, and the answer names the file and the type picked; Cancel answers no file.
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
     #[test]
     fn the_portal_is_asked_on_the_first_file_type_and_answers_the_one_picked() {
         let script = vec![(0, Some(("file:///home/me/Art/poster", "PDF-compatible .ai"))), (1, None)];
-        let Some((conn, seen, mut daemon)) = mock_portal(script, false) else {
+        let Some((conn, seen, mut daemon)) = mock_portal(script, Portal::Current) else {
             eprintln!("no dbus-daemon: skipped");
             return;
         };
         let request = request();
-        let saved = save_file(&conn, &request).unwrap();
+        let saved = save_within(&conn, &request).unwrap();
         assert_eq!(pick_answer(saved, &request), ["/home/me/Art/poster", "ai"]);
-        assert_eq!(save_file(&conn, &request), Ok(None));
+        assert_eq!(save_within(&conn, &request), Ok(None));
         let seen = seen.lock().map(|s| s.clone()).unwrap_or_default();
         assert_eq!(seen.first(), Some(&(Some("Untitled-1.vectorz".to_string()), Some(request.filters[0].0.clone()))));
         let _ = daemon.kill();
@@ -506,12 +607,28 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
     #[test]
     fn the_answer_is_awaited_on_the_path_the_portal_returns() {
-        let Some((conn, _seen, mut daemon)) = mock_portal(vec![(0, Some(("file:///tmp/card", "SVG")))], true) else {
+        let Some((conn, _seen, mut daemon)) = mock_portal(vec![(0, Some(("file:///tmp/card", "SVG")))], Portal::Old) else {
             eprintln!("no dbus-daemon: skipped");
             return;
         };
         let request = request();
-        assert_eq!(pick_answer(save_file(&conn, &request).unwrap(), &request), ["/tmp/card", "svg"]);
+        assert_eq!(pick_answer(save_within(&conn, &request).unwrap(), &request), ["/tmp/card", "svg"]);
+        let _ = daemon.kill();
+    }
+
+    /// A portal older than 0.9 can answer before its reply names the request path: the answer is
+    /// kept until the path is known, and the next dialog does not take it.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    #[test]
+    fn an_answer_that_comes_before_the_path_is_kept() {
+        let script = vec![(0, Some(("file:///tmp/card", "SVG"))), (1, None)];
+        let Some((conn, _seen, mut daemon)) = mock_portal(script, Portal::OldEarly) else {
+            eprintln!("no dbus-daemon: skipped");
+            return;
+        };
+        let request = request();
+        assert_eq!(pick_answer(save_within(&conn, &request).unwrap(), &request), ["/tmp/card", "svg"]);
+        assert_eq!(save_within(&conn, &request), Ok(None));
         let _ = daemon.kill();
     }
 

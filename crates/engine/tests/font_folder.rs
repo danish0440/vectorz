@@ -10,9 +10,14 @@ use serde_json::{Value, json};
 use vectorz_engine::Session;
 use vectorz_engine::cmd::findfiles::{Rules, plain};
 
-/// `text.findFontFiles {}` once the search ended (10 seconds at most).
+/// How long the test waits for a search to end. The wait only ends the test if the search never
+/// ends. A machine busy with other builds can hold a walker for seconds. It is shorter than a search's
+/// default `maxSeconds` of 60, which would end a search that does not end by itself.
+const WAIT: Duration = Duration::from_secs(30);
+
+/// `text.findFontFiles {}` once the search ended ([`WAIT`] at most).
 fn finished(s: &mut Session) -> Value {
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + WAIT;
     loop {
         let r = s.execute("text.findFontFiles", &json!({})).unwrap();
         if r["state"] != "searching" || Instant::now() > until {
@@ -65,6 +70,13 @@ fn a_found_font_is_copied_without_replacing_a_file_and_its_type_redraws() {
     let st = s.doc().unwrap();
     assert!(st.revision > revision && !st.is_dirty());
     assert_eq!(s.execute("text.missingFonts", &json!({})).unwrap()["count"], 0);
+
+    // A caller whose read roots hold the file but not the Fonts folder: the file is kept, and the
+    // reply names the copy by its file name only, without the folder.
+    let downloads = vectorz_engine::file_access::AutomationRoots::new(&[&root.join("Downloads")], &[]).unwrap();
+    let r = vectorz_engine::file_access::confine(downloads.as_ref(), || s.execute("text.addFontFiles", &json!({"files": [file]}))).unwrap();
+    assert_eq!((&r["folder"], &r["kept"]), (&Value::Null, &json!([{"from": file, "to": "Findme 2.otf"}])), "{r}");
+    assert!(!r.to_string().contains("App Fonts"), "{r}");
 
     // The same file again is kept, not copied a third time.
     let r = s.execute("text.addFontFiles", &json!({"files": [file]})).unwrap();
