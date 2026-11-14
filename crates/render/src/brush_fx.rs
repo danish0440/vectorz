@@ -1,17 +1,23 @@
 //! Brushed strokes and symbol-instance staining in the renderer.
 //!
 //! A stroke with `brush: Some(name)` is painted as the filled art `vectorz_brush::stroke_pieces`
-//! generates. Pieces are cached per (node, stroke item) and validated by the node's path, the
+//! generates. Pieces are cached per (node id, stroke item, path) and validated by the path, the
 //! stroke layer and the brush definition (an `Arc` from the per-frame parsed library), so edits to
-//! any of them regenerate the art and nothing else does.
+//! any of them regenerate the art and nothing else does. The copies of an object that share its id
+//! (symbol instances, inline graphics, repeat copies) have their own paths, so each keeps its own
+//! pieces. The pieces keep their `Arc`s while they are cached, so their stroke outlines, live-effect
+//! geometry and the evaluations of live objects come from the renderer's caches too. Brush art
+//! leaves out the symbol instances and pattern paints whose art draws a brushed stroke, so when
+//! the art of a symbol or pattern changes, the pieces of brushes and strokes that can show one are
+//! made again.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use vectorz_brush::Brush;
+use vectorz_brush::{Brush, BrushKind};
 use vectorz_doc::{AppearanceItem, Document, Node, NodeKind, StrokeLayer, SymbolBoxes};
-use vectorz_geom::{BezPath, Rect};
+use vectorz_geom::{BezPath, PathEl, Point, Rect};
 use vello_cpu::RenderContext;
 
 use crate::lru::{self, FrameCache};
@@ -21,7 +27,28 @@ pub(crate) struct Entry {
     path: BezPath,
     stroke: StrokeLayer,
     brush: Arc<Brush>,
-    pieces: Arc<Vec<Node>>,
+    pieces: Arc<Vec<Arc<Node>>>,
+    /// Can the pieces show symbol or pattern art ([`shows_definitions`])?
+    definitions: bool,
+}
+
+/// Can the brush art of `brush` along a stroke `st` show symbol or pattern art: does the stroke
+/// paint with a pattern, or does the brush's own art show a symbol or a pattern?
+fn shows_definitions(brush: &Brush, st: &StrokeLayer) -> bool {
+    let art: Vec<&Node> = match &brush.kind {
+        BrushKind::Art(a) => vec![&a.art],
+        BrushKind::Scatter(s) => vec![&s.art],
+        BrushKind::Pattern(p) => {
+            [Some(&p.side), p.outer_corner.as_ref(), p.inner_corner.as_ref(), p.start.as_ref(), p.end.as_ref()].into_iter().flatten().collect()
+        }
+        BrushKind::Calligraphic(_) | BrushKind::Bristle(_) => vec![],
+    };
+    matches!(st.paint, vectorz_color::Paint::Pattern { .. }) || crate::fx::Reads::of_all(art.into_iter()).shows_definitions()
+}
+
+/// The names and art of `doc`'s patterns and symbols, in order.
+fn definitions(doc: &Document) -> impl Iterator<Item = (&str, &Arc<Node>)> {
+    doc.patterns.iter().flat_map(|p| p.art.iter().map(|a| (p.name.as_str(), a))).chain(doc.symbols.iter().map(|s| (s.name.as_str(), &s.art)))
 }
 
 /// Parsed brush library and generated brush art.
@@ -34,12 +61,28 @@ pub(crate) struct BrushCache {
     /// (frame stamp, document address) the library was last validated for.
     checked: (u64, usize),
     lib: HashMap<String, Arc<Brush>>,
-    pub(crate) entries: FrameCache<(u64, usize), Entry>,
+    /// The names and art of the document's patterns and symbols ([`definitions`]) when the library
+    /// was last validated, the art held weakly as the pattern tiles hold theirs.
+    definitions: Vec<(String, Weak<Node>)>,
+    /// Brush art per (node id, stroke item index, [`path_key`] of the stroked path).
+    pub(crate) entries: FrameCache<(u64, usize, u64), Entry>,
+    /// How many times [`Renderer::draw_brush`] made brush art.
+    #[cfg(test)]
+    pub(crate) made: usize,
 }
 
 impl Default for BrushCache {
     fn default() -> Self {
-        Self { src: None, key: 0, checked: (0, 0), lib: HashMap::new(), entries: FrameCache::new(lru::BRUSH_BUDGET, 512) }
+        Self {
+            src: None,
+            key: 0,
+            checked: (0, 0),
+            lib: HashMap::new(),
+            definitions: Vec::new(),
+            entries: FrameCache::new(lru::BRUSH_BUDGET, 512),
+            #[cfg(test)]
+            made: 0,
+        }
     }
 }
 
@@ -50,6 +93,10 @@ impl BrushCache {
             return;
         }
         self.checked = key;
+        if !self.definitions.iter().map(|(n, a)| (n.as_str(), a.as_ptr())).eq(definitions(doc).map(|(n, a)| (n, Arc::as_ptr(a)))) {
+            self.definitions = definitions(doc).map(|(n, a)| (n.to_string(), Arc::downgrade(a))).collect();
+            self.entries.retain(|e| !e.definitions);
+        }
         let cur = doc.unknown.get(vectorz_brush::DOC_KEY);
         if self.src.as_ref().is_some_and(|s| s.as_ref() == cur) {
             return;
@@ -60,7 +107,12 @@ impl BrushCache {
             vectorz_brush::serde_json::to_string(v).unwrap_or_default().hash(&mut h);
             h.finish()
         });
-        self.lib = vectorz_brush::library(doc).into_iter().map(|b| (b.name.clone(), Arc::new(b))).collect();
+        // Of two brushes with one name, a stroke that names it draws with the first, as
+        // `vectorz_brush::find` and the exports take it.
+        self.lib.clear();
+        for b in vectorz_brush::library(doc) {
+            self.lib.entry(b.name.clone()).or_insert_with(|| Arc::new(b));
+        }
     }
 
     /// [`Self::key`] for the brush library `doc` holds (checked once a frame, `stamp`).
@@ -68,31 +120,77 @@ impl BrushCache {
         self.library(doc, stamp);
         self.key
     }
+
+    /// [`Self::library_key`] checked now, between frames: `doc` may be the document of the last
+    /// frame, edited in place.
+    pub(crate) fn library_key_now(&mut self, doc: &Document, stamp: u64) -> u64 {
+        self.checked = (u64::MAX, 0);
+        self.library_key(doc, stamp)
+    }
 }
 
 /// Cull bounds that allow for brush art reaching past the stroke (scatter, wide nibs), symbol
-/// instances measured by their art from `symbols`, with the brushed strokes in that art.
+/// instances measured by their art from `symbols`, with the brushed strokes in that art. A path
+/// whose live-effect plug-ins paint their pieces leaves that room past each piece
+/// ([`crate::fx::painted_cull_bounds`]). A group or layer leaves that room past each of its
+/// members, as the renderer measures a group by its members (`Renderer::bounds_of`).
 pub(crate) fn cull_bounds(symbols: &SymbolBoxes, n: &Node) -> Option<Rect> {
-    let b = crate::fx::cull_bounds(symbols, n)?;
+    if let Some(b) = crate::fx::painted_cull_bounds(symbols, n) {
+        return b;
+    }
+    let b = crate::fx::brushed_cull_bounds(symbols, n)?;
     let pad = pad(symbols, n);
     Some(b.inflate(pad, pad))
+}
+
+/// [`cull_bounds`] of path or compound path `n` made from `visual`, its visual bounds, when the
+/// renderer measures it by those ([`crate::fx::path_cull_bounds`]); else `None`.
+pub(crate) fn path_cull_bounds(symbols: &SymbolBoxes, n: &Node, visual: impl FnOnce() -> Option<Rect>) -> Option<Option<Rect>> {
+    let b = crate::fx::path_cull_bounds(symbols, n, visual)?;
+    Some(b.map(|b| {
+        let pad = pad(symbols, n);
+        b.inflate(pad, pad)
+    }))
 }
 
 /// How far brush art can paint past `n`'s brushed strokes, or past the brushed strokes in the art
 /// of symbol instance `n`: `16 × w + 8`, where `w` is the widest stroke (at least 1) of `n` when it
 /// has a visible brushed stroke and of the objects in that art that have one
-/// ([`SymbolBoxes::brush_width`]), and 0 when neither has one.
+/// ([`SymbolBoxes::brush_width`]) or the pieces live-effect plug-ins paint for them
+/// ([`crate::fx::painted_brush_width`]), and 0 when neither has one.
 pub(crate) fn pad(symbols: &SymbolBoxes, n: &Node) -> f64 {
     let own = vectorz_brush::has_brush(n)
         .then(|| n.appearance.items.iter().filter_map(|i| if let AppearanceItem::Stroke(s) = i { Some(s.width) } else { None }).fold(1.0, f64::max));
     let art = match &n.kind {
-        NodeKind::SymbolInstance { symbol, .. } => symbols.brush_width(symbol).map(|w| w.max(1.0)),
+        NodeKind::SymbolInstance { symbol, .. } => {
+            symbols.brush_width(symbol).into_iter().chain(crate::fx::painted_brush_width(symbols, symbol)).reduce(f64::max).map(|w| w.max(1.0))
+        }
         _ => None,
     };
     own.into_iter().chain(art).reduce(f64::max).map_or(0.0, |w| 16.0 * w + 8.0)
 }
 
 pub use vectorz_brush::instance_art;
+
+/// A hash of the kinds and points of `bp`'s elements. With the node id and the stroke item, it
+/// forms the key of the brush art made along `bp`.
+fn path_key(bp: &BezPath) -> u64 {
+    let mut h = DefaultHasher::new();
+    for el in bp.elements() {
+        let (kind, points) = match *el {
+            PathEl::MoveTo(p) => (0u8, [p, Point::ZERO, Point::ZERO]),
+            PathEl::LineTo(p) => (1, [p, Point::ZERO, Point::ZERO]),
+            PathEl::QuadTo(a, b) => (2, [a, b, Point::ZERO]),
+            PathEl::CurveTo(a, b, c) => (3, [a, b, c]),
+            PathEl::ClosePath => (4, [Point::ZERO; 3]),
+        };
+        kind.hash(&mut h);
+        for p in points {
+            (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
+        }
+    }
+    h.finish()
+}
 
 impl Renderer {
     /// Paint stroke `st` of `n` (outline `bp`) with its brush. Returns false when the brush is
@@ -102,28 +200,53 @@ impl Renderer {
         self.brushes.library(f.doc, self.stamp);
         let Some(brush) = self.brushes.lib.get(name).cloned() else { return false };
         let idx = n.appearance.items.iter().position(|i| matches!(i, AppearanceItem::Stroke(s) if std::ptr::eq(s, st))).unwrap_or(usize::MAX);
-        let key = (n.id.0, idx);
+        let key = (n.id.0, idx, path_key(bp));
         let stamp = self.stamp;
-        let pieces = match self.brushes.entries.get(&key, stamp) {
-            Some(e) if Arc::ptr_eq(&e.brush, &brush) && e.stroke == *st && e.path == *bp => e.pieces.clone(),
+        let (pieces, kept) = match self.brushes.entries.get(&key, stamp) {
+            Some(e) if Arc::ptr_eq(&e.brush, &brush) && e.stroke == *st && e.path == *bp => (e.pieces.clone(), true),
             _ => {
-                let pieces = Arc::new(vectorz_brush::stroke_pieces(f.doc, &brush, bp, st));
-                let bytes = size_of::<Entry>() + lru::path_bytes(bp) + pieces.iter().map(lru::node_bytes).sum::<usize>();
-                self.brushes.entries.insert(key, Entry { path: bp.clone(), stroke: st.clone(), brush, pieces: pieces.clone() }, bytes, stamp);
-                pieces
+                #[cfg(test)]
+                {
+                    self.brushes.made += 1;
+                }
+                let pieces: Arc<Vec<Arc<Node>>> =
+                    Arc::new(vectorz_brush::stroke_pieces(f.doc, &brush, bp, st).into_iter().map(Arc::new).collect());
+                let bytes = size_of::<Entry>() + lru::path_bytes(bp) + pieces.iter().map(|p| lru::node_bytes(p)).sum::<usize>();
+                let definitions = shows_definitions(&brush, st);
+                let entry = Entry { path: bp.clone(), stroke: st.clone(), brush, pieces: pieces.clone(), definitions };
+                let kept = self.brushes.entries.insert(key, entry, bytes, stamp);
+                (pieces, kept)
             }
         };
-        let mut draw = |r: &mut Self, c: &mut RenderContext, fr: &Frame| {
-            for p in pieces.iter() {
-                r.draw_node(c, fr, p, true);
-            }
-        };
+        let mut draw = |r: &mut Self, c: &mut RenderContext, fr: &Frame| r.draw_brush_pieces(c, fr, &pieces, kept);
         if st.opacity < 1.0 || st.blend != vectorz_color::BlendMode::Normal {
             self.group(ctx, f, crate::group::Composite { blend: st.blend, opacity: st.opacity, ..Default::default() }, &mut draw);
         } else {
             draw(self, ctx, f);
         }
         true
+    }
+
+    /// Draw brush art `pieces`, each whatever its visibility and bounds. A piece that is a path
+    /// without effects is drawn as `cur`. When the brush cache keeps the pieces (`kept`), their
+    /// `Arc`s stay the same from frame to frame: such a path piece takes its stroke outlines from the
+    /// stroke cache as on the fast path ([`Self::cached_stroke`]), and each piece is also drawn as
+    /// `fx_owner` through [`Self::draw_kept_node`], so its live-effect geometry and, when it is a
+    /// live object, its evaluation come from the caches. Pieces the cache does not keep are drawn as
+    /// art made again ([`Self::made_again`]).
+    fn draw_brush_pieces(&mut self, ctx: &mut RenderContext, f: &Frame, pieces: &[Arc<Node>], kept: bool) {
+        let outer = (std::mem::replace(&mut self.made_again, !kept), self.cur.take());
+        for p in pieces {
+            self.cur = (matches!(p.kind, NodeKind::Path { guide: false, .. }) && !crate::fx::has_fx(p)).then(|| p.clone());
+            if kept {
+                let owner = self.fx_owner.replace(p.clone());
+                self.draw_kept_node(ctx, f, p);
+                self.fx_owner = owner;
+            } else {
+                self.draw_forced_arc(ctx, f, p);
+            }
+        }
+        (self.made_again, self.cur) = outer;
     }
 }
 
@@ -169,6 +292,84 @@ mod tests {
     }
 
     #[test]
+    fn art_brush_piece_applies_its_root_mask() {
+        use vectorz_brush::{ArtBrush, ArtScale, Brush, BrushKind, Colorization};
+        use vectorz_doc::OpacityMask;
+
+        let mut d = doc_with_line(Some("Masked art"), 1.0);
+        let mut art = Node::path(
+            d.alloc_id(),
+            shapes::rectangle(Rect::new(0.0, -5.0, 10.0, 5.0)),
+            Appearance::basic(Paint::solid(Color::BLACK), Paint::None, 0.0),
+        );
+        let black = Node::path(
+            d.alloc_id(),
+            shapes::rectangle(Rect::new(0.0, 0.0, 200.0, 100.0)),
+            Appearance::basic(Paint::solid(Color::BLACK), Paint::None, 0.0),
+        );
+        art.extras_mut().mask = Some(Box::new(OpacityMask::new(black, true)));
+        let brush = Brush {
+            name: "Masked art".into(),
+            kind: BrushKind::Art(ArtBrush { art, scale: ArtScale::Stretch, colorization: Colorization::None, ..Default::default() }),
+        };
+        vectorz_brush::store(&mut d, &[brush]);
+
+        let mut renderer = Renderer::new();
+        for _ in 0..2 {
+            let img = render(&mut renderer, &d);
+            assert_eq!(img.pixel(100, 50), [255, 255, 255, 255]);
+        }
+    }
+
+    /// Object opacity fades a brushed stroke's art as a whole, with or without a dash and a fill:
+    /// the same as the object at full opacity inside a group at that opacity.
+    #[test]
+    fn object_opacity_fades_a_brushed_stroke_once() {
+        for (dashed, fill) in [(false, false), (true, false), (false, true), (true, true)] {
+            let node = |d: &mut Document, opacity: f32| {
+                let id = d.alloc_id();
+                let fill = if fill { Paint::solid(Color::rgb(0.9, 0.1, 0.1)) } else { Paint::None };
+                let mut ap = Appearance::basic(fill, Paint::solid(Color::BLACK), 1.0);
+                let st = ap.stroke_mut().unwrap();
+                st.brush = Some("10 pt. Oval".into());
+                if dashed {
+                    st.dash = Some(vectorz_doc::Dash { pattern: vec![12.0, 4.0], ..Default::default() });
+                }
+                let mut n = Node::path(id, shapes::rectangle(Rect::new(30.0, 30.0, 170.0, 70.0)), ap);
+                n.opacity = opacity;
+                n
+            };
+            let mut faded = Document::new(200.0, 100.0);
+            let n = node(&mut faded, 0.5);
+            let l = faded.layers[0].id;
+            faded.insert(Some(l), 0, n).unwrap();
+            let mut grouped = Document::new(200.0, 100.0);
+            let n = node(&mut grouped, 1.0);
+            let mut g = Node::group(grouped.alloc_id(), vec![std::sync::Arc::new(n)]);
+            g.opacity = 0.5;
+            let l = grouped.layers[0].id;
+            grouped.insert(Some(l), 0, g).unwrap();
+            let (a, b) = (render(&mut Renderer::new(), &faded), render(&mut Renderer::new(), &grouped));
+            assert!(
+                dark(
+                    render(&mut Renderer::new(), &{
+                        let mut d = Document::new(200.0, 100.0);
+                        let n = node(&mut d, 1.0);
+                        let l = d.layers[0].id;
+                        d.insert(Some(l), 0, n).unwrap();
+                        d
+                    })
+                    .pixel(30, 50)
+                ),
+                "the brush paints the edge"
+            );
+            let off =
+                a.pixels.chunks(4).zip(b.pixels.chunks(4)).filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| (*p as i32 - *q as i32).abs() > 2)).count();
+            assert_eq!(off, 0, "dashed {dashed}, fill {fill}: {off} pixels differ from the object faded as a whole");
+        }
+    }
+
+    #[test]
     fn unknown_brush_falls_back_to_plain_stroke_and_scatter_renders() {
         let mut r = Renderer::new();
         let img = render(&mut r, &doc_with_line(Some("No Such Brush"), 2.0));
@@ -192,6 +393,24 @@ mod tests {
         assert!(!dark(a.pixel(100, 58)) && dark(b.pixel(100, 58)));
     }
 
+    /// Of two brushes with one name, a stroke that names it draws with the first.
+    #[test]
+    fn a_stroke_draws_with_the_first_of_two_brushes_with_its_name() {
+        use vectorz_brush::{Brush, BrushKind, Calligraphic};
+        let nib = |size: f64| Brush { name: "Twin".into(), kind: BrushKind::Calligraphic(Calligraphic { size, ..Default::default() }) };
+        let doc = |lib: &[Brush]| {
+            let mut d = doc_with_line(Some("Twin"), 1.0);
+            vectorz_brush::store(&mut d, lib);
+            d
+        };
+        let (thin, wide) = (nib(1.0), nib(20.0));
+        let first = render(&mut Renderer::new(), &doc(std::slice::from_ref(&thin))).pixels;
+        let second = render(&mut Renderer::new(), &doc(std::slice::from_ref(&wide))).pixels;
+        assert_ne!(first, second, "the two nibs paint differently");
+        let both = render(&mut Renderer::new(), &doc(&[thin, wide])).pixels;
+        assert!(both == first, "the stroke draws with the first brush named Twin");
+    }
+
     #[test]
     fn stained_symbol_instance() {
         let mut d = Document::new(100.0, 100.0);
@@ -200,7 +419,7 @@ mod tests {
             shapes::rectangle(Rect::new(-10.0, -10.0, 10.0, 10.0)),
             Appearance::basic(Paint::solid(Color::BLACK), Paint::None, 0.0),
         );
-        d.symbols.push(vectorz_doc::Symbol { name: "S".into(), art: std::sync::Arc::new(art) });
+        d.symbols.push(vectorz_doc::Symbol { dynamic: false, name: "S".into(), art: std::sync::Arc::new(art) });
         let id = d.alloc_id();
         let mut inst = Node::new(id, vectorz_doc::NodeKind::SymbolInstance { symbol: "S".into(), xf: Affine::translate((50.0, 50.0)) });
         inst.appearance.set_fill(Paint::solid(Color::rgb(1.0, 0.0, 0.0)));
@@ -224,7 +443,7 @@ mod tests {
         let mut ap = Appearance::basic(Paint::None, Paint::solid(Color::BLACK), 1.0);
         ap.stroke_mut().unwrap().brush = Some("3 pt. Round".into());
         let art = Node::path(vectorz_doc::NodeId(0), shapes::line((0.0, 40.0).into(), (0.0, 60.0).into()), ap);
-        d.symbols.push(vectorz_doc::Symbol { name: "Nib".into(), art: std::sync::Arc::new(art) });
+        d.symbols.push(vectorz_doc::Symbol { dynamic: false, name: "Nib".into(), art: std::sync::Arc::new(art) });
         let id = d.alloc_id();
         let inst = Node::new(id, vectorz_doc::NodeKind::SymbolInstance { symbol: "Nib".into(), xf: Affine::translate((-6.0, 0.0)) });
         let l = d.layers[0].id;
@@ -254,7 +473,7 @@ mod tests {
             let moved = Affine::translate((-8.0, 0.0));
             let source = if instance {
                 let art = line(&mut d);
-                d.symbols.push(vectorz_doc::Symbol { name: "Nib".into(), art: std::sync::Arc::new(art) });
+                d.symbols.push(vectorz_doc::Symbol { dynamic: false, name: "Nib".into(), art: std::sync::Arc::new(art) });
                 Node::new(d.alloc_id(), vectorz_doc::NodeKind::SymbolInstance { symbol: "Nib".into(), xf: moved })
             } else {
                 let mut n = line(&mut d);

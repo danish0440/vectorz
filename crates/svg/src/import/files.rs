@@ -3,17 +3,32 @@
 //! stays a linked image ([`LinkInfo`]); an SVG file becomes vector art. One that can't be read
 //! (missing, remote, not an image) becomes a placeholder that keeps the link and its place, so it
 //! can be relinked, and a warning.
+//!
+//! A raster image, linked or a data URL, whose orientation (EXIF, or a TIFF's Orientation tag)
+//! turns or flips its pixels is turned before usvg gets it, so it is sized, fitted and stored as
+//! it is shown.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use usvg::{ImageHrefResolver, ImageKind, roxmltree};
 use vectorz_doc::LinkInfo;
+use vectorz_doc::links::missing_placeholder;
 
-use super::{Edits, href};
-use crate::ImportOptions;
+use super::{Edits, depth, href};
+use crate::{ImportOptions, MAX_ELEMENT_DEPTH, MAX_SVGZ, SvgError};
+
+/// Most nested SVG images an imported SVG may decode (#3564).
+pub const MAX_NESTED_SVG_IMAGES: usize = 256;
+
+/// Most nested SVG images an imported SVG may read, decoded or not: each one read is checked and
+/// parsed, and an image that fails is read again wherever it is shown.
+pub const MAX_NESTED_SVG_READS: usize = 1024;
+
+/// Most bytes of nested SVG image text an imported SVG may read, decoded or not, all reads together.
+pub const MAX_NESTED_SVG_TEXT: u64 = 512 << 20;
 
 /// The files an SVG's images link to.
 #[derive(Default)]
@@ -24,13 +39,53 @@ pub(in crate::import) struct Files {
     links: HashMap<usize, Linked>,
     /// An SVG image had text (which isn't imported).
     text: AtomicBool,
+    /// How deep the SVGs around the SVG image being read nest, added up: usvg reads an SVG image
+    /// while it reads the SVG showing it, on the same stack, so one cap ([`MAX_ELEMENT_DEPTH`])
+    /// holds for them all.
+    depth: AtomicUsize,
+    /// The bytes the SVGZ images (data and files) unpacked to so far, whether or not they
+    /// decoded: together they unpack to at most what one SVGZ file may ([`MAX_SVGZ`]), however
+    /// they nest.
+    unpacked: AtomicU64,
+    /// An SVG image was left out for nesting too deep in the SVGs around it.
+    too_deep: AtomicBool,
+    /// An SVGZ image was left out for unpacking past what the SVGZ images may.
+    too_big: AtomicBool,
+    /// How many nested SVG images were decoded so far.
+    svg_images: AtomicUsize,
+    /// SVG images were left out for exceeding [`MAX_NESTED_SVG_IMAGES`].
+    too_many_svg_images: AtomicBool,
+    /// How many nested SVG images were read so far, decoded or not.
+    svg_reads: AtomicUsize,
+    /// The bytes of text those reads took.
+    svg_text: AtomicU64,
+    /// SVG images were left out for exceeding [`MAX_NESTED_SVG_READS`] or [`MAX_NESTED_SVG_TEXT`].
+    too_much_svg_read: AtomicBool,
+    /// The CMYK TIFF stored in place of a turned CMYK image, by the address of the PNG usvg got
+    /// (kept here too, so the address stays its own).
+    cmyk: Mutex<HashMap<usize, (Bytes, Bytes)>>,
 }
 
+/// Encoded image bytes, shared.
+type Bytes = Arc<Vec<u8>>;
+
+/// Raster bytes as usvg gets them.
+struct Shown {
+    kind: RasterKind,
+    bytes: Arc<Vec<u8>>,
+    /// The CMYK TIFF stored in their place: a turned CMYK image's inks, turned.
+    cmyk: Option<Vec<u8>>,
+}
+
+/// How usvg holds the bytes of a raster of one format (`ImageKind::PNG`…).
+type RasterKind = fn(Arc<Vec<u8>>) -> ImageKind;
+
+#[derive(Clone)]
 enum Source {
     /// A raster file of the kind usvg reads it as.
-    Raster(fn(Arc<Vec<u8>>) -> ImageKind, Arc<Vec<u8>>),
-    /// An SVG file, parsed by usvg as an image.
-    Svg(Arc<Vec<u8>>),
+    Raster(RasterKind, Arc<Vec<u8>>),
+    /// An SVG file's text (unpacked when it is SVGZ), parsed by usvg as an image.
+    Svg(Arc<str>),
 }
 
 /// A linked raster image (or the placeholder of a missing one).
@@ -38,22 +93,6 @@ pub(in crate::import) struct Linked {
     pub link: LinkInfo,
     /// The file wasn't read: the bytes are a placeholder.
     pub missing: bool,
-}
-
-/// The side of the placeholder image, in pixels.
-const MARKER: u32 = 64;
-
-/// The placeholder of a missing linked image: a light tile, crossed out (drawn here).
-fn marker() -> Option<Vec<u8>> {
-    let last = MARKER - 1;
-    let img = image::RgbaImage::from_fn(MARKER, MARKER, |x, y| {
-        let edge = x == 0 || y == 0 || x == last || y == last;
-        let cross = x.abs_diff(y) <= 1 || (x + y).abs_diff(last) <= 1;
-        image::Rgba(if edge || cross { [200, 60, 60, 255] } else { [236, 236, 236, 255] })
-    });
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
-    Some(png)
 }
 
 /// `s` with `%XX` escapes decoded (an href is a URL).
@@ -64,7 +103,11 @@ fn percent_decoded(s: &str) -> String {
     let mut out = Vec::with_capacity(s.len());
     let mut rest = s.as_bytes();
     while let Some((&b, tail)) = rest.split_first() {
-        let hex = tail.get(..2).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        let hex = tail
+            .get(..2)
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
         match hex {
             Some(v) if b == b'%' => {
                 out.push(v);
@@ -101,7 +144,7 @@ fn target(h: &str, folder: Option<&str>) -> (String, Option<String>) {
     });
     match craft_docpath::resolve(&stored, document.as_deref()) {
         Ok(path) => {
-            let file = path.is_absolute().then(|| path.to_string_lossy().into_owned());
+            let file = craft_docpath::resolve_absolute(&stored, document.as_deref()).ok().map(|p| p.to_string_lossy().into_owned());
             let as_written = !file_url && craft_docpath::resolve(&stored, None).as_ref() == Ok(&path);
             let link = if as_written { stored } else { path.to_string_lossy().into_owned() };
             (link, file)
@@ -122,18 +165,33 @@ impl Files {
     pub(in crate::import) fn read(svg: &str, xml: &roxmltree::Document, opts: &ImportOptions, edits: &mut Edits, warnings: &mut Vec<String>) -> Self {
         let mut files = Files::default();
         let mut placeholder = None;
+        // What each file read gave, by the file: hrefs spelled differently (`a.png`, `./a.png`,
+        // `%61.png`) share one read and one copy of its bytes.
+        let mut by_file: HashMap<String, Result<Source, &str>> = HashMap::new();
         for n in xml.descendants().filter(|n| n.is_element() && n.tag_name().name() == "image") {
             let Some(h) = href(n).filter(|h| !h.trim_start().starts_with("data:")) else { continue };
             if !files.sources.contains_key(h) {
                 let (path, file) = target(h, opts.folder);
-                let read = file.and_then(|file| opts.read.and_then(|read| read(&file)));
-                let source = match read {
-                    Some((bytes, link)) => files.source(bytes, link).ok_or("is not an image VectorZ reads"),
-                    None => Err("not found"),
+                // A failed read is cached too, but each href gets its own placeholder: its own link
+                // path (an Arc shared between hrefs would share the first href's link) and warning.
+                let cached = file.as_ref().and_then(|f| by_file.get(f)).cloned();
+                let source = match cached {
+                    Some(source) => source,
+                    None => {
+                        let read = file.clone().and_then(|file| opts.read.and_then(|read| read(&file)));
+                        let source = match read {
+                            Some((bytes, link)) => files.source(bytes, link).ok_or("is not an image VectorZ reads"),
+                            None => Err("not found"),
+                        };
+                        if let Some(file) = file {
+                            by_file.insert(file, source.clone());
+                        }
+                        source
+                    }
                 };
                 let source = source.or_else(|why| {
                     warnings.push(format!("linked image '{h}' {why}: a placeholder keeps its place until it is relinked"));
-                    let bytes = Arc::new(placeholder.get_or_insert_with(marker).clone().ok_or(why)?);
+                    let bytes = Arc::new(placeholder.get_or_insert_with(missing_placeholder).clone().ok_or(why)?);
                     files.links.insert(key(&bytes), Linked { link: LinkInfo::new(path), missing: true });
                     Ok::<_, &str>(Source::Raster(ImageKind::PNG, bytes))
                 });
@@ -147,31 +205,35 @@ impl Files {
         files
     }
 
-    /// What usvg gets for a file read (`bytes`, linked by `link`): a raster usvg reads (others are
-    /// stored as PNG) or an SVG; `None` for anything else.
+    /// What usvg gets for a file read (`bytes`, linked by `link`): a raster as [`shown`] gives it
+    /// (formats usvg doesn't read are stored as PNG) or an SVG; `None` for anything else.
     fn source(&mut self, bytes: Vec<u8>, link: LinkInfo) -> Option<Source> {
-        use image::ImageFormat as F;
         let Ok(format) = image::guess_format(&bytes) else {
-            let svg = crate::text_of(&bytes).is_ok_and(|t| t.contains("<svg"));
-            return svg.then(|| Source::Svg(Arc::new(bytes)));
+            // Unpacked once, here, within what the SVGZ images may unpack to.
+            let text = crate::text_within(&bytes, &self.unpacked).ok()?;
+            return text.contains("<svg").then(|| Source::Svg(Arc::from(text.as_ref())));
         };
-        let kind = match format {
-            F::Png => ImageKind::PNG,
-            F::Jpeg => ImageKind::JPEG,
-            F::Gif => ImageKind::GIF,
-            F::WebP => ImageKind::WEBP,
-            _ => {
-                let img = image::load_from_memory_with_format(&bytes, format).ok()?;
-                let mut png = Vec::new();
-                img.write_to(&mut std::io::Cursor::new(&mut png), F::Png).ok()?;
-                let png = Arc::new(png);
-                self.links.insert(key(&png), Linked { link, missing: false });
-                return Some(Source::Raster(ImageKind::PNG, png));
-            }
-        };
-        let bytes = Arc::new(bytes);
+        let (kind, bytes) = self.keep(shown(Arc::new(bytes), format)?);
         self.links.insert(key(&bytes), Linked { link, missing: false });
         Some(Source::Raster(kind, bytes))
+    }
+
+    /// What usvg gets for `shown`, with its CMYK TIFF, when it has one, noted to store in its
+    /// place ([`Files::stored`]).
+    fn keep(&self, shown: Shown) -> (RasterKind, Arc<Vec<u8>>) {
+        if let Some(cmyk) = shown.cmyk
+            && let Ok(mut stored) = self.cmyk.lock()
+        {
+            stored.insert(key(&shown.bytes), (shown.bytes.clone(), Arc::new(cmyk)));
+        }
+        (shown.kind, shown.bytes)
+    }
+
+    /// The CMYK TIFF stored in place of the image whose data usvg got as `kind`: a CMYK JPEG or
+    /// TIFF its orientation turns, which usvg got as PNG.
+    pub(in crate::import) fn stored(&self, kind: &ImageKind) -> Option<Arc<Vec<u8>>> {
+        let ImageKind::PNG(b) = kind else { return None };
+        self.cmyk.lock().ok()?.get(&key(b)).map(|(_, tiff)| tiff.clone())
     }
 
     /// Does href `h` show a placeholder?
@@ -192,46 +254,231 @@ impl Files {
         self.text.load(Ordering::Relaxed)
     }
 
-    fn note_text(&self, svg: &[u8]) {
-        if svg.windows(5).any(|w| w == b"<text") {
+    /// The warnings of the SVG images left out.
+    pub(in crate::import) fn left_out(&self) -> Vec<String> {
+        let mut notes = vec![];
+        if self.too_deep.load(Ordering::Relaxed) {
+            notes.push(format!("SVG images were left out: with the SVGs around them, their elements nest more than {MAX_ELEMENT_DEPTH} deep"));
+        }
+        if self.too_big.load(Ordering::Relaxed) {
+            notes.push(format!("SVGZ images were left out: together they unpack to more than {} MB", MAX_SVGZ >> 20));
+        }
+        if self.too_many_svg_images.load(Ordering::Relaxed) {
+            notes.push(format!("SVG images were left out: more than {MAX_NESTED_SVG_IMAGES} nested SVG images"));
+        }
+        if self.too_much_svg_read.load(Ordering::Relaxed) {
+            notes.push(format!(
+                "SVG images were left out: nested SVG images, valid or not, are read at most {MAX_NESTED_SVG_READS} times and {} MB of text",
+                MAX_NESTED_SVG_TEXT >> 20
+            ));
+        }
+        notes
+    }
+
+    fn note_text(&self, svg: &str) {
+        if svg.contains("<text") {
             self.text.store(true, Ordering::Relaxed);
         }
     }
 
-    /// usvg's image resolver: data URLs as usvg reads them, other hrefs only from the files read.
-    pub(in crate::import) fn resolver(&self) -> ImageHrefResolver<'_> {
-        let data = ImageHrefResolver::default_data_resolver();
+    /// usvg's image resolver, for an SVG whose elements nest `height` deep: data URLs as usvg
+    /// reads them, other hrefs only from the files read. SVG images are read here
+    /// ([`Files::svg_data`], [`Files::svg`]), never by usvg's own resolver, which caps neither how
+    /// deep they nest nor what they unpack to.
+    pub(in crate::import) fn resolver(&self, height: usize) -> ImageHrefResolver<'_> {
+        self.depth.store(height, Ordering::Relaxed);
         ImageHrefResolver {
+            // By type as usvg reads them, and TIFF; one without a type (`text/plain`) by its
+            // bytes: one of those rasters, else SVG. A raster as [`shown`] gives it.
             resolve_data: Box::new(move |mime, bytes, opts| {
-                if mime == "image/svg+xml" {
-                    if nested_too_deep(&bytes) {
-                        return None;
-                    }
-                    self.note_text(&bytes);
-                }
-                data(mime, bytes, opts)
+                use image::ImageFormat as F;
+                let format = match mime {
+                    "image/jpg" | "image/jpeg" => F::Jpeg,
+                    "image/png" => F::Png,
+                    "image/gif" => F::Gif,
+                    "image/webp" => F::WebP,
+                    "image/tiff" => F::Tiff,
+                    "image/svg+xml" => return self.svg_data(&bytes, opts),
+                    "text/plain" => match image::guess_format(&bytes).ok().filter(|f| raster(*f).is_some() || *f == F::Tiff) {
+                        Some(format) => format,
+                        None => return self.svg_data(&bytes, opts),
+                    },
+                    _ => return None,
+                };
+                let (kind, bytes) = self.keep(shown(bytes, format)?);
+                Some(kind(bytes))
             }),
             resolve_string: Box::new(move |h, opts| match self.sources.get(h).or_else(|| self.sources.get(h.trim()))? {
                 Source::Raster(kind, bytes) => Some(kind(bytes.clone())),
-                Source::Svg(bytes) if nested_too_deep(bytes) => None,
-                Source::Svg(bytes) => {
-                    self.note_text(bytes);
-                    usvg::Tree::from_data_nested(bytes, opts).ok().map(ImageKind::SVG)
-                }
+                Source::Svg(text) => self.svg(text, opts),
             }),
         }
     }
+
+    /// The SVG image of data `bytes` (SVG or SVGZ), as [`Files::svg`] reads it. Unpacked here,
+    /// within what the SVGZ images have left, so usvg unpacks nothing itself; past it, `None`,
+    /// noted.
+    fn svg_data(&self, bytes: &[u8], opts: &usvg::Options) -> Option<ImageKind> {
+        match crate::text_within(bytes, &self.unpacked) {
+            Ok(text) => self.svg(&text, opts),
+            Err(e) => leave_out(&self.too_big, matches!(e, SvgError::TooBig(_))),
+        }
+    }
+
+    /// The SVG image `text` as usvg reads it with `opts`. `None`, the image left out as one usvg
+    /// can't read, when it isn't SVG or when its elements nest deeper than the SVGs around it
+    /// leave: usvg reads it while it reads them, on the same stack. Only a decoded image, with the
+    /// images decoded inside it, counts toward [`MAX_NESTED_SVG_IMAGES`]; every image read counts
+    /// toward [`MAX_NESTED_SVG_READS`] and [`MAX_NESTED_SVG_TEXT`].
+    fn svg(&self, text: &str, opts: &usvg::Options) -> Option<ImageKind> {
+        let decoded = self.svg_images.load(Ordering::Relaxed);
+        if decoded >= MAX_NESTED_SVG_IMAGES {
+            return leave_out(&self.too_many_svg_images, true);
+        }
+        let reads = self.svg_reads.load(Ordering::Relaxed);
+        let read = self.svg_text.load(Ordering::Relaxed).saturating_add(text.len() as u64);
+        if reads >= MAX_NESTED_SVG_READS || read > MAX_NESTED_SVG_TEXT {
+            return leave_out(&self.too_much_svg_read, true);
+        }
+        self.svg_reads.store(reads + 1, Ordering::Relaxed);
+        self.svg_text.store(read, Ordering::Relaxed);
+        // The image's place is taken while usvg reads it, so the images inside it get what is left.
+        // usvg reads them all on this thread, so no other read comes between these steps.
+        self.svg_images.store(decoded + 1, Ordering::Relaxed);
+        let tree = self.svg_tree(text, opts);
+        if tree.is_none() {
+            self.svg_images.store(decoded, Ordering::Relaxed);
+        }
+        tree
+    }
+
+    /// [`Files::svg`]'s image once it is counted.
+    fn svg_tree(&self, text: &str, opts: &usvg::Options) -> Option<ImageKind> {
+        // Measured as the SVG holding it is (`import`): the text before the XML reader.
+        let used = self.depth.load(Ordering::Relaxed);
+        let left = MAX_ELEMENT_DEPTH.saturating_sub(used);
+        if depth::xml_deeper_than(text, left) {
+            return leave_out(&self.too_deep, true);
+        }
+        let xml = super::parse(text).ok()?;
+        let Some(height) = depth::height(&xml, left) else { return leave_out(&self.too_deep, true) };
+        // usvg's parser would overflow on it, as on the SVG holding it (`import`).
+        super::convolve_matrices_ok(&xml).ok()?;
+        self.depth.store(used + height, Ordering::Relaxed);
+        let tree = usvg::Tree::from_data_nested(text.as_bytes(), opts);
+        self.depth.store(used, Ordering::Relaxed);
+        let tree = tree.ok()?;
+        self.note_text(text);
+        Some(ImageKind::SVG(tree))
+    }
 }
 
-/// Is the SVG image `bytes` nested too deep for usvg to read (as the SVG holding it would be)?
-/// It is then left out, as an image usvg can't read.
-fn nested_too_deep(bytes: &[u8]) -> bool {
-    crate::text_of(bytes).is_ok_and(|text| super::xml_too_deep(&text))
+/// How usvg holds a raster of `format`, for the formats it reads.
+fn raster(format: image::ImageFormat) -> Option<RasterKind> {
+    use image::ImageFormat as F;
+    match format {
+        F::Png => Some(ImageKind::PNG),
+        F::Jpeg => Some(ImageKind::JPEG),
+        F::Gif => Some(ImageKind::GIF),
+        F::WebP => Some(ImageKind::WEBP),
+        _ => None,
+    }
+}
+
+/// Encoded raster `bytes`, `format` by their type (or by their bytes when they have none), as usvg
+/// gets them, as Open and Place store them: unchanged when usvg reads the format and the image's
+/// orientation ([`vectorz_doc::cmyk::exif_orientation`], read for PNG, JPEG, GIF, WebP and
+/// TIFF) leaves the pixels as stored. Otherwise the pixels are read ([`decoded`],
+/// [`tiff_pixels`]), turned or flipped as the orientation says, and written as PNG, so usvg sizes
+/// and fits the image as it is shown. A CMYK TIFF also keeps its inks as a CMYK TIFF
+/// ([`vectorz_doc::cmyk::stored_cmyk_tiff`]), and a CMYK JPEG or TIFF that is turned keeps them
+/// turned ([`vectorz_doc::cmyk::turned_cmyk`]). `None` when the pixels can't be read, and for
+/// a TIFF with more strips or tiles than the decoder can count
+/// ([`vectorz_doc::cmyk::oversized_tiff`]), before any decoder opens it.
+fn shown(bytes: Arc<Vec<u8>>, format: image::ImageFormat) -> Option<Shown> {
+    use image::ImageFormat as F;
+    if vectorz_doc::cmyk::oversized_tiff(&bytes).is_some() {
+        return None;
+    }
+    let orientation =
+        matches!(format, F::Png | F::Jpeg | F::Gif | F::WebP | F::Tiff).then(|| vectorz_doc::cmyk::exif_orientation(&bytes)).flatten();
+    if let Some(kind) = raster(format)
+        && orientation.is_none()
+    {
+        return Some(Shown { kind, bytes, cmyk: None });
+    }
+    let tiff = image::guess_format(&bytes).ok() == Some(F::Tiff);
+    let mut img = if tiff { tiff_pixels(&bytes)? } else { decoded(&bytes, format)? };
+    let cmyk = match orientation {
+        Some(o) if matches!(format, F::Jpeg | F::Tiff) => vectorz_doc::cmyk::turned_cmyk(&bytes, o, None).map(|(tiff, _)| tiff),
+        None if tiff => vectorz_doc::cmyk::stored_cmyk_tiff(&bytes, None),
+        _ => None,
+    };
+    if let Some(orientation) = orientation {
+        img.apply_orientation(orientation);
+    }
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), F::Png).ok()?;
+    Some(Shown { kind: ImageKind::PNG, bytes: Arc::new(png), cmyk })
+}
+
+/// The pixels of encoded image `bytes` (`format` when their bytes don't say), as stored, decoded
+/// within [`vectorz_doc::MAX_RASTER_ALLOC`], counted as decoded and as RGBA, as Open and Place
+/// decode them; `None` when they can't be.
+fn decoded(bytes: &[u8], format: image::ImageFormat) -> Option<image::DynamicImage> {
+    use image::ImageDecoder as _;
+    let max = vectorz_doc::MAX_RASTER_ALLOC;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    if reader.format().is_none() {
+        reader.set_format(format);
+    }
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(max);
+    reader.limits(limits);
+    let decoder = reader.into_decoder().ok()?;
+    let (w, h) = decoder.dimensions();
+    if decoder.total_bytes() > max || u64::from(w) * u64::from(h) * 4 > max {
+        return None;
+    }
+    image::DynamicImage::from_decoder(decoder).ok()
+}
+
+/// The pixels of TIFF `bytes`, as stored, read as Open and Place read them: a TIFF with extra
+/// samples (CMYK or gray with alpha) as RGBA, CMYK converted with the active color settings
+/// ([`vectorz_doc::cmyk::extra_samples_tiff_rgba`]); a 1-bit TIFF compressed with CCITT Group
+/// 3 as RGBA ([`vectorz_doc::cmyk::group3_tiff_rgba`]); others by [`decoded`], a CMYK TIFF
+/// that stores one plane per ink with its inks written together first
+/// ([`vectorz_doc::cmyk::stored_cmyk_tiff`]). `None` when they can't be read.
+fn tiff_pixels(bytes: &[u8]) -> Option<image::DynamicImage> {
+    use image::DynamicImage::ImageRgba8;
+    let cms = vectorz_color::cms::active();
+    if let Some(img) = vectorz_doc::cmyk::extra_samples_tiff_rgba(bytes, |c| cms.cmyk_to_srgb(c, false)) {
+        return Some(ImageRgba8(img));
+    }
+    if let Some(read) = vectorz_doc::cmyk::group3_tiff_rgba(bytes) {
+        return read.ok().map(ImageRgba8);
+    }
+    decoded(bytes, image::ImageFormat::Tiff).or_else(|| decoded(&vectorz_doc::cmyk::stored_cmyk_tiff(bytes, None)?, image::ImageFormat::Tiff))
+}
+
+/// No image: left out, noted in `why` when `noted`.
+fn leave_out(why: &AtomicBool, noted: bool) -> Option<ImageKind> {
+    if noted {
+        why.store(true, Ordering::Relaxed);
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percent_decoding_needs_two_hex_digits() {
+        assert_eq!(percent_decoded("a%41b"), "aAb");
+        assert_eq!(percent_decoded("a%+1b"), "a%+1b");
+        assert_eq!(percent_decoded("a%-1b"), "a%-1b");
+    }
 
     #[test]
     fn hrefs_resolve_against_the_folder() {
@@ -305,9 +552,111 @@ mod tests {
         assert_eq!(percent_decoded("%E2%82%AC"), "€");
     }
 
+    /// SVGZ images unpack, all together, to at most what one SVGZ file may: past it, an image is
+    /// left out and noted, where usvg unpacked it without a cap (#3563). Text that isn't packed
+    /// isn't counted, and a broken SVGZ image is left out as one usvg can't read.
     #[test]
-    fn the_placeholder_is_a_png() {
-        let png = marker().unwrap();
-        assert_eq!(image::load_from_memory(&png).unwrap().width(), MARKER);
+    fn svgz_images_share_the_unpacking_cap() {
+        let inner = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="1" height="1"/></svg>"#;
+        let (gz, plain) = (Arc::new(crate::compress(inner)), Arc::new(inner.as_bytes().to_vec()));
+        let files = Files::default();
+        let resolver = files.resolver(2);
+        let opts = usvg::Options::default();
+        let read = |mime: &str, bytes: &Arc<Vec<u8>>| matches!((resolver.resolve_data)(mime, bytes.clone(), &opts), Some(ImageKind::SVG(_)));
+        assert!(read("image/svg+xml", &gz) && read("text/plain", &gz) && read("image/svg+xml", &plain));
+        assert_eq!(files.unpacked.load(Ordering::Relaxed), 2 * inner.len() as u64);
+        assert!(!read("image/svg+xml", &Arc::new(vec![0x1f, 0x8b, 8, 0, 1, 2])));
+        assert!(files.left_out().is_empty(), "broken, not too big");
+        // What they unpack to is counted, not the text it decodes to (UTF-16 is twice as long),
+        // and counted when it doesn't decode.
+        let counted = |bytes: &[u8], svg: bool| {
+            let before = files.unpacked.load(Ordering::Relaxed);
+            assert_eq!(read("image/svg+xml", &Arc::new(crate::compress_bytes(bytes))), svg);
+            files.unpacked.load(Ordering::Relaxed) - before
+        };
+        let utf16: Vec<u8> = [0xff, 0xfe].into_iter().chain(inner.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        assert_eq!(counted(&utf16, true), utf16.len() as u64);
+        assert_eq!(counted(&[0xff; 100], false), 100);
+        files.unpacked.store(MAX_SVGZ - inner.len() as u64 + 1, Ordering::Relaxed);
+        assert!(!read("image/svg+xml", &gz) && !read("text/plain", &gz));
+        assert!(read("image/svg+xml", &plain), "not packed");
+        assert_eq!(files.left_out(), [format!("SVGZ images were left out: together they unpack to more than {} MB", MAX_SVGZ >> 20)]);
+    }
+
+    /// A linked SVGZ file is unpacked once, when it is read, within the same cap.
+    #[test]
+    fn a_linked_svgz_file_unpacks_once() {
+        let inner = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="1" height="1"/></svg>"#;
+        let mut files = Files::default();
+        let source = files.source(crate::compress(inner), LinkInfo::new("a.svgz")).unwrap();
+        files.sources.insert("a.svgz".into(), source);
+        assert_eq!(files.unpacked.load(Ordering::Relaxed), inner.len() as u64);
+        let resolver = files.resolver(2);
+        assert!(matches!((resolver.resolve_string)("a.svgz", &usvg::Options::default()), Some(ImageKind::SVG(_))));
+        assert_eq!(files.unpacked.load(Ordering::Relaxed), inner.len() as u64);
+        drop(resolver);
+        files.unpacked.store(MAX_SVGZ, Ordering::Relaxed);
+        assert!(files.source(crate::compress(inner), LinkInfo::new("b.svgz")).is_none(), "past the cap");
+    }
+
+    /// An SVG image gets what the SVGs around it leave of the depth cap.
+    #[test]
+    fn svg_images_get_what_is_left_of_the_depth_cap() {
+        let svg = |n: usize| format!(r#"<svg xmlns="http://www.w3.org/2000/svg">{}{}</svg>"#, "<g>".repeat(n), "</g>".repeat(n));
+        let read = |around: usize, n: usize| {
+            let files = Files::default();
+            let resolver = files.resolver(around);
+            let kind = (resolver.resolve_data)("image/svg+xml", Arc::new(svg(n).into_bytes()), &usvg::Options::default());
+            (matches!(kind, Some(ImageKind::SVG(_))), files.left_out().len())
+        };
+        assert_eq!(read(1, MAX_ELEMENT_DEPTH - 2), (true, 0));
+        assert_eq!(read(2, MAX_ELEMENT_DEPTH - 2), (false, 1));
+        assert_eq!(read(MAX_ELEMENT_DEPTH, 0), (false, 1));
+    }
+
+    /// An SVG image with a `feConvolveMatrix` order usvg's multiply overflows is left out before
+    /// usvg reads it, as the SVG holding it would be refused.
+    #[test]
+    fn svg_images_with_an_overflowing_convolve_order_are_left_out() {
+        let read = |order: &str| {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><filter id="f"><feConvolveMatrix order="{order}" kernelMatrix="1"/></filter><rect width="4" height="4" filter="url(#f)"/></svg>"#
+            );
+            let files = Files::default();
+            let resolver = files.resolver(1);
+            matches!((resolver.resolve_data)("image/svg+xml", Arc::new(svg.into_bytes()), &usvg::Options::default()), Some(ImageKind::SVG(_)))
+        };
+        assert!(!read("2147483647"));
+        assert!(read("1"));
+    }
+
+    /// The nested SVG images read, decoded or not, take at most [`MAX_NESTED_SVG_TEXT`] bytes of
+    /// text together: an image whose text goes past it is left out and noted. A broken image's
+    /// text counts too, and its decoded place is given back.
+    #[test]
+    fn svg_images_share_the_text_cap() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="1" height="1"/></svg>"#;
+        let broken = &svg[..20];
+        let files = Files::default();
+        let resolver = files.resolver(1);
+        let opts = usvg::Options::default();
+        let read =
+            |text: &str| matches!((resolver.resolve_data)("image/svg+xml", Arc::new(text.as_bytes().to_vec()), &opts), Some(ImageKind::SVG(_)));
+        assert!(!read(broken));
+        assert_eq!(files.svg_text.load(Ordering::Relaxed), broken.len() as u64);
+        assert_eq!((files.svg_reads.load(Ordering::Relaxed), files.svg_images.load(Ordering::Relaxed)), (1, 0));
+        files.svg_text.store(MAX_NESTED_SVG_TEXT - svg.len() as u64, Ordering::Relaxed);
+        assert!(read(svg));
+        assert_eq!((files.svg_reads.load(Ordering::Relaxed), files.svg_images.load(Ordering::Relaxed)), (2, 1));
+        assert!(files.left_out().is_empty());
+        assert!(!read(svg) && !read(broken));
+        assert_eq!(files.svg_text.load(Ordering::Relaxed), MAX_NESTED_SVG_TEXT, "past the cap, nothing is read");
+        assert_eq!(
+            files.left_out(),
+            [format!(
+                "SVG images were left out: nested SVG images, valid or not, are read at most {MAX_NESTED_SVG_READS} times and {} MB of text",
+                MAX_NESTED_SVG_TEXT >> 20
+            )]
+        );
     }
 }

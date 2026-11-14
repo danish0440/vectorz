@@ -8,6 +8,51 @@ use vectorz_geom::{Affine, FillRule, PathData, Point, Rect, shapes};
 
 use crate::*;
 
+mod actual_text;
+mod blend;
+mod charstroke;
+mod cmykblend;
+mod cmykimages;
+mod colorize;
+mod compression;
+mod conic;
+mod dashalign;
+mod diamond;
+mod editing;
+mod encrypt;
+mod file_info;
+mod focal;
+mod fx;
+mod import_color;
+pub(super) mod import_fidelity;
+mod import_layers;
+mod import_lines;
+mod import_options;
+mod import_overprint;
+mod layers;
+mod links;
+pub(super) mod live_text;
+mod marks;
+mod measuring;
+mod mesh_export;
+mod output;
+mod pdf13;
+mod pdfx;
+mod presets;
+mod print;
+mod printadvanced;
+mod reader_compat;
+mod reader_streaming;
+mod realtext;
+mod reshaped;
+mod settings;
+mod spread;
+pub(super) mod stroke;
+mod strokeout;
+mod text_placement;
+mod textstroke;
+mod webview;
+
 fn doc(w: f64, h: f64) -> Document {
     Document::new(w, h)
 }
@@ -37,13 +82,18 @@ fn close(a: Rect, b: Rect, tol: f64) -> bool {
     (a.x0 - b.x0).abs() < tol && (a.y0 - b.y0).abs() < tol && (a.x1 - b.x1).abs() < tol && (a.y1 - b.y1).abs() < tol
 }
 
+/// `d` exported with the default options and imported back: the document a round trip through a PDF
+/// gives.
 fn roundtrip(d: &Document) -> Document {
     let bytes = export(d, &PdfOptions::default()).expect("export");
     import(&bytes).expect("import")
 }
 
+/// `d` exported uncompressed, dated `created: Some(0)` rather than by the clock: two exports of one
+/// document are then the same bytes, where the clock's dates, in whole seconds, differ whenever a
+/// second ticks between them.
 fn uncompressed(d: &Document) -> String {
-    let bytes = export(d, &PdfOptions::uncompressed()).expect("export");
+    let bytes = export(d, &PdfOptions { created: Some(0), ..PdfOptions::uncompressed() }).expect("export");
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -79,15 +129,25 @@ fn one_page_per_artboard_with_sizes() {
         id: 2,
         name: "B".into(),
         rect: Rect::new(300.0, 0.0, 400.0, 400.0),
+        locked: false,
         show_center_mark: false,
         show_cross_hairs: false,
+        show_video_safe_areas: false,
+        video_ruler_pixel_aspect_ratio: 1.0,
+        color: None,
+        guide_label: None,
     });
     d.artboards.push(Artboard {
         id: 3,
         name: "C".into(),
         rect: Rect::new(0.0, 500.0, 612.0, 1292.0),
+        locked: false,
         show_center_mark: false,
         show_cross_hairs: false,
+        show_video_safe_areas: false,
+        video_ruler_pixel_aspect_ratio: 1.0,
+        color: None,
+        guide_label: None,
     });
     let bytes = export(&d, &PdfOptions::default()).unwrap();
     let pdf = craft_pdf::syntax::Pdf::new(bytes).unwrap();
@@ -102,8 +162,13 @@ fn artboard_range_and_bad_index() {
         id: 2,
         name: "B".into(),
         rect: Rect::new(300.0, 0.0, 400.0, 400.0),
+        locked: false,
         show_center_mark: false,
         show_cross_hairs: false,
+        show_video_safe_areas: false,
+        video_ruler_pixel_aspect_ratio: 1.0,
+        color: None,
+        guide_label: None,
     });
     let bytes = export(&d, &PdfOptions { artboards: Some(vec![1]), ..Default::default() }).unwrap();
     let pdf = craft_pdf::syntax::Pdf::new(bytes).unwrap();
@@ -139,7 +204,7 @@ fn an_instance_whose_art_reaches_the_page_is_written() {
     // the 20 × 20 square around the origin, moved to (-60, -60) to (-40, -40), is off it.
     let mut d = doc(200.0, 100.0);
     let red = rect_node(Rect::new(100.0, 50.0, 140.0, 90.0), Color::rgb(1.0, 0.0, 0.0));
-    let far = vectorz_doc::Symbol { name: "Far".into(), art: Arc::new(red) };
+    let far = vectorz_doc::Symbol { dynamic: false, name: "Far".into(), art: Arc::new(red) };
     d.symbols.push(far.clone());
     let instance = Node::new(NodeId(0), NodeKind::SymbolInstance { symbol: "Far".into(), xf: Affine::translate((-50.0, -50.0)) });
     add(&mut d, instance.clone());
@@ -173,12 +238,131 @@ fn an_instance_whose_brush_art_reaches_the_page_is_written() {
     let mut stroke = Appearance::basic(Paint::None, Paint::solid(Color::BLACK), 1.0);
     stroke.stroke_mut().unwrap().brush = Some("3 pt. Round".into());
     let line = Node::path(NodeId(0), shapes::line((0.0, 40.0).into(), (0.0, 60.0).into()), stroke);
-    d.symbols.push(vectorz_doc::Symbol { name: "Nib".into(), art: Arc::new(line) });
+    d.symbols.push(vectorz_doc::Symbol { dynamic: false, name: "Nib".into(), art: Arc::new(line) });
     add(&mut d, Node::new(NodeId(0), NodeKind::SymbolInstance { symbol: "Nib".into(), xf: Affine::translate((-5.0, 0.0)) }));
     let out = roundtrip(&d);
     let l = leaves(&out);
     assert_eq!(l.len(), 1, "the nib's art");
     assert!(close(l[0].geometric_bounds().unwrap(), Rect::new(-15.0, 30.0, 5.0, 70.0), 0.01), "{:?}", l[0].geometric_bounds());
+}
+
+/// An instance of a symbol with 9-slice guides, scaled to 200 × 150, is written as the canvas
+/// draws it: its 10 × 10 corner square stays 10 × 10 and its 10 × 10 center square becomes 30 × 20.
+#[test]
+fn a_scaled_nine_slice_instance_keeps_its_corners() {
+    let mut d = doc(300.0, 200.0);
+    let art = Node::group(
+        NodeId(0),
+        vec![
+            Arc::new(rect_node(Rect::new(0.0, 0.0, 100.0, 100.0), Color::rgb8(200, 200, 200))),
+            Arc::new(rect_node(Rect::new(0.0, 0.0, 10.0, 10.0), Color::rgb(1.0, 0.0, 0.0))),
+            Arc::new(rect_node(Rect::new(45.0, 45.0, 55.0, 55.0), Color::rgb(0.0, 0.0, 1.0))),
+        ],
+    );
+    d.symbols.push(vectorz_doc::Symbol { dynamic: false, name: "Panel".into(), art: Arc::new(art) });
+    d.set_symbol_nine_slice("Panel", Some(vectorz_doc::SymbolNineSlice::default()));
+    let xf = Affine::translate((20.0, 20.0)) * Affine::scale_non_uniform(2.0, 1.5);
+    add(&mut d, Node::new(NodeId(0), NodeKind::SymbolInstance { symbol: "Panel".into(), xf }));
+    let out = roundtrip(&d);
+    let boxes: Vec<Rect> = leaves(&out).iter().filter_map(|n| n.geometric_bounds()).collect();
+    assert_eq!(boxes.len(), 3, "{boxes:?}");
+    assert!(close(boxes[0], Rect::new(20.0, 20.0, 220.0, 170.0), 0.01), "{boxes:?}");
+    assert!(close(boxes[1], Rect::new(20.0, 20.0, 30.0, 30.0), 0.01), "{boxes:?}");
+    assert!(close(boxes[2], Rect::new(105.0, 85.0, 135.0, 105.0), 0.01), "{boxes:?}");
+}
+
+/// An instance of symbol `name` placed by `xf`, its fill red at `opacity` (shown when `visible`).
+fn stained_instance(name: &str, xf: Affine, opacity: f32, visible: bool) -> Node {
+    let mut n = Node::new(NodeId(0), NodeKind::SymbolInstance { symbol: name.into(), xf });
+    n.appearance = Appearance::basic(Paint::solid(Color::rgb(1.0, 0.0, 0.0)), Paint::None, 0.0).into();
+    n.appearance.items.retain(AppearanceItem::is_fill);
+    if let AppearanceItem::Fill(f) = &mut n.appearance.items[0] {
+        (f.opacity, f.visible) = (opacity, visible);
+    }
+    n
+}
+
+/// The fill colors of `d`'s leaves, in paint order.
+fn leaf_fills(d: &Document) -> Vec<String> {
+    leaves(d).iter().filter_map(|n| n.appearance.fill_paint().color()).map(|c| c.to_hex()).collect()
+}
+
+/// A stained instance is written in the colors the canvas draws it in
+/// ([`vectorz_brush::instance_art`]): on its own, with a Transform effect that moves it, inside
+/// a group, after a dynamic symbol's own fill change, and placed through 9-slice guides. A hidden
+/// fill or one at 0% opacity leaves the art's colors as they are.
+#[test]
+fn a_stained_instance_keeps_its_stain() {
+    let blue = Color::rgb8(30, 90, 220);
+    let art = || Node::group(NodeId(0), vec![Arc::new(rect_node(Rect::new(0.0, 0.0, 100.0, 100.0), blue))]);
+    let canvas = |n: &Node| leaf_fills_of(&vectorz_brush::instance_art(&art(), n));
+    fn leaf_fills_of(n: &Node) -> Vec<String> {
+        let mut d = doc(10.0, 10.0);
+        add(&mut d, n.clone());
+        leaf_fills(&d)
+    }
+    let write = |n: Node, nine_slice: bool| {
+        let mut d = doc(300.0, 200.0);
+        d.symbols.push(vectorz_doc::Symbol { dynamic: true, name: "Panel".into(), art: Arc::new(art()) });
+        if nine_slice {
+            d.set_symbol_nine_slice("Panel", Some(vectorz_doc::SymbolNineSlice::default()));
+        }
+        add(&mut d, n);
+        leaf_fills(&roundtrip(&d))
+    };
+    let half = stained_instance("Panel", Affine::translate((20.0, 20.0)), 0.5, true);
+    let want = canvas(&half);
+    assert_ne!(want, [blue.to_hex()], "the stain changes the color");
+    assert_eq!(write(half.clone(), false), want, "on its own");
+    let mut moved = half.clone();
+    moved.appearance.effects.push(vectorz_doc::Effect {
+        id: "distort.transform".into(),
+        params: serde_json::json!({"moveH": 30.0}),
+        visible: true,
+    });
+    assert_eq!(write(moved, false), want, "with a geometry effect");
+    assert_eq!(write(Node::group(NodeId(0), vec![Arc::new(half.clone())]), false), want, "in a group");
+    let mut scaled = half.clone();
+    scaled.kind = NodeKind::SymbolInstance { symbol: "Panel".into(), xf: Affine::translate((20.0, 20.0)) * Affine::scale_non_uniform(2.0, 1.5) };
+    assert_eq!(write(scaled, true), want, "through 9-slice guides");
+    let mut changed = half.clone();
+    changed.extras_mut().symbol_overrides =
+        vec![vectorz_doc::SymbolOverride { path: vec![0], fill: Some(Paint::solid(Color::rgb(0.0, 1.0, 0.0))), ..Default::default() }];
+    let changed_want = canvas(&changed);
+    assert_ne!(changed_want, want, "the part's own fill is stained");
+    assert_eq!(write(changed, false), changed_want, "after a dynamic symbol's change");
+    for (opacity, visible) in [(0.0, true), (0.5, false)] {
+        assert_eq!(write(stained_instance("Panel", Affine::IDENTITY, opacity, visible), false), [blue.to_hex()], "unstained");
+    }
+}
+
+/// The placed art of all the 9-slice instances in one export holds at most `MAX_SYMBOL_NODES`
+/// objects, opacity-mask art included, as on the canvas: of two instances whose art placed through
+/// the guides holds about 9,009,000 objects each (a gradient square in all nine cells, each copy
+/// with a disabled opacity mask of 1,001,001 objects), the first is written in its nine cells and
+/// the second is left out. With a small mask both are written.
+#[test]
+fn nine_slice_instances_share_one_object_limit_in_an_export() {
+    let doc = |mask_objects: usize| {
+        let mut d = doc(300.0, 200.0);
+        let leaf = Arc::new(rect_node(Rect::new(0.0, 0.0, 1.0, 1.0), Color::BLACK));
+        let inner = Arc::new(Node::group(NodeId(0), vec![leaf; mask_objects]));
+        let mut mask = vectorz_doc::OpacityMask::new(Node::group(NodeId(0), vec![inner; mask_objects]), true);
+        (mask.linked, mask.disabled) = (false, true);
+        let gradient = Paint::Gradient(Box::new(GradientPaint::new(Gradient::default())));
+        let mut square = Node::path(NodeId(0), shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0)), Appearance::basic(gradient, Paint::None, 0.0));
+        square.extras_mut().mask = Some(Box::new(mask));
+        let art = Node::group(NodeId(0), vec![Arc::new(square)]);
+        d.symbols.push(vectorz_doc::Symbol { dynamic: false, name: "Panel".into(), art: Arc::new(art) });
+        d.set_symbol_nine_slice("Panel", Some(vectorz_doc::SymbolNineSlice::default()));
+        for x in [20.0, 40.0] {
+            let xf = Affine::translate((x, 20.0)) * Affine::scale_non_uniform(2.0, 1.5);
+            add(&mut d, Node::new(NodeId(0), NodeKind::SymbolInstance { symbol: "Panel".into(), xf }));
+        }
+        d
+    };
+    assert_eq!(leaves(&roundtrip(&doc(2))).len(), 18);
+    assert_eq!(leaves(&roundtrip(&doc(1_000))).len(), 9);
 }
 
 #[test]
@@ -373,6 +557,7 @@ fn art_reaching_beyond_a_billion_points_is_left_out() {
         xf: Affine::new([5.5e8, 0.0, 0.0, 10.0, far, 60.0]),
         link: None,
         placement: Default::default(),
+        pixels: None,
     };
     for (what, n) in [
         ("path", rect_node(Rect::new(far, 60.0, 90.0, 90.0), Color::BLACK)),
@@ -503,6 +688,30 @@ fn text_exported_as_outlines() {
     assert!(b.x0 >= 9.0 && b.x1 < 120.0 && b.y1 <= 56.0 && b.y0 > 25.0, "{b:?}");
 }
 
+/// Colour bitmap glyphs (emoji) are images in the PDF: in their font's Type 3 glyphs with real
+/// text, else drawn where the glyphs are.
+#[test]
+fn colour_bitmap_glyphs_export_as_images() {
+    use vectorz_text::test_fonts::{COLOUR_CHAR, colour_bitmap_family, colour_bitmap_font};
+    for sbix in [true, false] {
+        vectorz_text::FontDb::global().add_font(colour_bitmap_font(sbix).unwrap());
+        let mut d = doc(300.0, 100.0);
+        let st = CharStyle { font_family: colour_bitmap_family(sbix).into(), size: 24.0, ..CharStyle::default() };
+        add(&mut d, Node::new(NodeId(0), NodeKind::Text(Box::new(TextObject::point(Point::new(10.0, 50.0), &format!("{COLOUR_CHAR}F"), st)))));
+        let text = uncompressed(&d).replace(' ', "");
+        assert!(text.contains("/Type3") && text.contains("/Subtype/Image"), "an image in a Type 3 glyph (sbix {sbix})");
+        let mut outlined = PdfOptions::uncompressed();
+        outlined.settings.advanced.outline_text = true;
+        let r = import_with_report(&export(&d, &outlined).unwrap(), &ImportOptions::default()).unwrap();
+        let l = leaves(&r.document);
+        let images: Vec<_> = l.iter().filter(|n| matches!(n.kind, NodeKind::Image(_))).collect();
+        assert_eq!(images.len(), 1, "outlined, the glyph is an image (sbix {sbix})");
+        let b = images[0].geometric_bounds().unwrap();
+        assert!((b.width() - 24.0).abs() < 0.1 && (b.height() - 24.0).abs() < 0.1, "one em: {b:?}");
+        assert!(l.iter().any(|n| matches!(n.kind, NodeKind::Path { .. })), "the other glyph stays an outline");
+    }
+}
+
 fn tiny_png() -> Vec<u8> {
     let mut img = image::RgbaImage::new(4, 2);
     for (x, _, p) in img.enumerate_pixels_mut() {
@@ -524,6 +733,7 @@ fn image_roundtrip() {
         xf: Affine::translate((20.0, 30.0)) * Affine::scale(10.0),
         link: None,
         placement: Default::default(),
+        pixels: None,
     };
     add(&mut d, Node::new(NodeId(0), NodeKind::Image(Box::new(im))));
     let out = roundtrip(&d);
@@ -536,6 +746,31 @@ fn image_roundtrip() {
     let decoded = image::load_from_memory(&blob.bytes).unwrap().to_rgba8();
     assert_eq!(decoded.get_pixel(0, 0).0, [255, 0, 0, 255]);
     assert_eq!(decoded.get_pixel(3, 0).0, [0, 0, 0, 255]);
+}
+
+/// Images are written with /Interpolate true, so viewers may smooth them; a pixelated image (an
+/// envelope's with Anti-Alias off) is written without it.
+#[test]
+fn a_pixelated_image_asks_viewers_not_to_smooth_it() {
+    for pixelated in [false, true] {
+        let mut d = doc(200.0, 200.0);
+        d.images.insert("img1".into(), ImageBlob::new("image/png", tiny_png()));
+        let im = ImageObject {
+            key: "img1".into(),
+            width: 4,
+            height: 2,
+            xf: Affine::translate((20.0, 30.0)) * Affine::scale(10.0),
+            link: None,
+            placement: Default::default(),
+            pixels: None,
+        };
+        let mut n = Node::new(NodeId(0), NodeKind::Image(Box::new(im)));
+        n.extras_mut().pixelated = pixelated;
+        add(&mut d, n);
+        let pdf = uncompressed(&d);
+        assert_eq!(pdf.matches("/Width 4").count(), 1, "the image is written");
+        assert_eq!(pdf.matches("/Interpolate").count(), usize::from(!pixelated), "pixelated: {pixelated}");
+    }
 }
 
 /// A 4 × 2 red image encoded as `format`, cut short `keep` bytes past the first `tag` in it: its
@@ -565,7 +800,7 @@ fn an_image_whose_pixels_cant_be_decoded_is_left_out_with_one_note() {
     for (i, (key, blob)) in blobs.into_iter().enumerate() {
         d.images.insert(key.into(), blob);
         let xf = Affine::translate((20.0, 20.0 + 50.0 * i as f64)) * Affine::scale(10.0);
-        let im = ImageObject { key: key.into(), width: 4, height: 2, xf, link: None, placement: Default::default() };
+        let im = ImageObject { key: key.into(), width: 4, height: 2, xf, link: None, placement: Default::default(), pixels: None };
         add(&mut d, Node::new(NodeId(0), NodeKind::Image(Box::new(im))));
     }
     add(&mut d, rect_node(Rect::new(100.0, 100.0, 150.0, 150.0), Color::BLACK));
@@ -586,7 +821,7 @@ fn an_image_whose_pixels_cant_be_decoded_is_left_out_with_one_note() {
 }
 
 /// #2023: a group's Transform effect copies an image among its members as it does the paths: the
-/// PDF draws the image three times, where the effect put it.
+/// PDF draws the image three times, where the effect put it, the original on top.
 #[test]
 fn a_group_transform_effect_exports_its_image_copies() {
     let mut d = doc(200.0, 100.0);
@@ -598,6 +833,7 @@ fn a_group_transform_effect_exports_its_image_copies() {
         xf: Affine::translate((20.0, 30.0)) * Affine::scale(5.0),
         link: None,
         placement: Default::default(),
+        pixels: None,
     };
     let image = Arc::new(Node::new(d.alloc_id(), NodeKind::Image(Box::new(im))));
     let mut square = rect_node(Rect::new(20.0, 60.0, 30.0, 70.0), Color::BLACK);
@@ -612,7 +848,7 @@ fn a_group_transform_effect_exports_its_image_copies() {
     let out = roundtrip(&d);
     let lefts: Vec<f64> =
         leaves(&out).iter().filter(|n| matches!(n.kind, NodeKind::Image(_))).filter_map(|n| n.geometric_bounds()).map(|b| b.x0.round()).collect();
-    assert_eq!(lefts, [20.0, 70.0, 120.0]);
+    assert_eq!(lefts, [120.0, 70.0, 20.0]);
 }
 
 /// Build a PDF with a correct xref table from object bodies.
@@ -723,8 +959,13 @@ fn import_max_pages_and_multi_page() {
         id: 2,
         name: "B".into(),
         rect: Rect::new(300.0, 0.0, 400.0, 400.0),
+        locked: false,
         show_center_mark: false,
         show_cross_hairs: false,
+        show_video_safe_areas: false,
+        video_ruler_pixel_aspect_ratio: 1.0,
+        color: None,
+        guide_label: None,
     });
     add(&mut d, rect_node(Rect::new(10.0, 10.0, 50.0, 50.0), Color::BLACK));
     add(&mut d, rect_node(Rect::new(310.0, 10.0, 350.0, 50.0), Color::BLACK));
@@ -862,6 +1103,77 @@ fn opacity_mask_exports_as_luminosity_soft_mask() {
     assert!(text.contains("/Luminosity"));
 }
 
+/// The warnings and path count after exporting an image mask and a separate rectangle.
+fn image_mask_report(colorized: bool, available: bool, nested: bool, unwritable: bool) -> (Vec<String>, usize) {
+    let mut d = doc(100.0, 100.0);
+    if available {
+        d.images.insert("mask-image".into(), ImageBlob::png(tiny_png()));
+    }
+    let im = ImageObject {
+        key: "mask-image".into(),
+        width: 4,
+        height: 2,
+        xf: Affine::translate(if unwritable { (1e10, 1e10) } else { (10.0, 10.0) }) * Affine::scale(10.0),
+        link: None,
+        placement: Default::default(),
+        pixels: None,
+    };
+    let mut art = Node::new(d.alloc_id(), NodeKind::Image(Box::new(im)));
+    if colorized {
+        art.extras_mut().colorize = Some(Box::new(Paint::solid(Color::rgb(0.0, 0.0, 1.0))));
+    }
+    if nested {
+        let mut outer_art = rect_node(Rect::new(10.0, 10.0, 50.0, 30.0), Color::WHITE);
+        outer_art.extras_mut().mask = Some(Box::new(vectorz_doc::OpacityMask::new(art, false)));
+        art = outer_art;
+    }
+    let mut masked = rect_node(Rect::new(10.0, 10.0, 50.0, 30.0), Color::rgb(1.0, 0.0, 0.0));
+    masked.extras_mut().mask = Some(Box::new(vectorz_doc::OpacityMask::new(art, false)));
+    add(&mut d, masked);
+    add(&mut d, rect_node(Rect::new(60.0, 60.0, 80.0, 80.0), Color::BLACK));
+    let report = export_with_report(&d, &PdfOptions::uncompressed()).expect("export");
+    let imported = import(&report.bytes).expect("import");
+    let paths = leaves(&imported).into_iter().filter(|n| n.path_data().is_some()).count();
+    (report.warnings, paths)
+}
+
+#[test]
+fn missing_colorized_image_in_unclipped_mask_omits_masked_object() {
+    let (warnings, paths) = image_mask_report(true, false, false, false);
+    assert!(warnings.iter().any(|w| w == "an image couldn't be decoded and is missing from the picture"), "{warnings:?}");
+    assert_eq!(paths, 1);
+}
+
+#[test]
+fn missing_plain_image_in_unclipped_mask_omits_masked_object() {
+    let (warnings, paths) = image_mask_report(false, false, false, false);
+    assert!(warnings.iter().any(|w| w == "an image couldn't be decoded and is missing from the picture"), "{warnings:?}");
+    assert_eq!(paths, 1);
+}
+
+#[test]
+fn missing_image_in_nested_mask_omits_outer_masked_object() {
+    let (warnings, paths) = image_mask_report(false, false, true, false);
+    assert!(warnings.iter().any(|w| w == "an image couldn't be decoded and is missing from the picture"), "{warnings:?}");
+    assert_eq!(paths, 1);
+}
+
+#[test]
+fn writable_colorized_image_in_unclipped_mask_keeps_masked_object() {
+    let (warnings, paths) = image_mask_report(true, true, false, false);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(paths, 2);
+}
+
+#[test]
+fn unwritable_images_in_unclipped_masks_omit_masked_objects() {
+    for colorized in [false, true] {
+        let (warnings, paths) = image_mask_report(colorized, true, false, true);
+        assert!(warnings.iter().any(|w| w == "an image couldn't be written and is missing from the picture"), "{warnings:?}");
+        assert_eq!(paths, 1, "colorized: {colorized}");
+    }
+}
+
 #[test]
 fn empty_and_populated_file_info_preserve_key_presence() {
     let mut d = doc(100.0, 100.0);
@@ -870,15 +1182,17 @@ fn empty_and_populated_file_info_preserve_key_presence() {
     for key in ["/Title", "/Author", "/Keywords", "<dc:title>", "<dc:creator>", "<pdf:Keywords>"] {
         assert!(!s.contains(key), "unexpected empty metadata {key}");
     }
+    assert!(!s.contains("/DisplayDocTitle true"), "the default export does not request displaying its metadata title");
     d.title = "Synthetic title".into();
     d.metadata.author = " Test author ".into();
     d.metadata.keywords = vec!["test keyword".into()];
-    let bytes = export(&d, &PdfOptions { created: Some(1_700_000_000), ..PdfOptions::uncompressed() }).unwrap();
+    let bytes = export(&d, &PdfOptions { display_doc_title: true, created: Some(1_700_000_000), ..PdfOptions::uncompressed() }).unwrap();
     let s = String::from_utf8_lossy(&bytes);
     for key in ["/Title", "/Author", "/Keywords", "/CreationDate", "<dc:title>", "<dc:creator>", "<pdf:Keywords>"] {
         assert!(s.contains(key), "missing populated metadata {key}");
     }
     assert!(s.contains("Synthetic title") && s.contains("Test author") && s.contains("test keyword"));
+    assert!(s.contains("/ViewerPreferences<</DisplayDocTitle true>>"), "viewers should show the document title (#3646)");
 }
 
 /// A function or colour space built on itself is refused before the interpreter builds it (by
@@ -951,4 +1265,118 @@ fn dictionary_values_the_reader_cannot_parse_are_skipped() {
         let e = import(&looped).err().map(|e| e.to_string());
         assert!(e.as_deref().is_some_and(|e| e.contains("built on one another without end")), "{junk}: {e:?}");
     }
+}
+
+/// Illustrator's documentation describes dither as the gradient converted to pixels with subtle
+/// noise, at the Document Raster Effects resolution
+/// (https://helpx.adobe.com/illustrator/desktop/paint-and-fill/create-and-edit-gradients/control-dither-in-gradients.html):
+/// a dithered gradient fill is drawn as an image at that resolution, clipped to the shape; a
+/// stroke (dither applies to fills only) and an undithered fill stay shadings.
+#[test]
+fn dithered_gradient_fills_export_as_images_and_strokes_as_shadings() {
+    let grad = |dither| Paint::Gradient(Box::new(GradientPaint::new(Gradient { dither, ..Default::default() })));
+    let shape = shapes::rectangle(Rect::new(10.0, 10.0, 110.0, 60.0));
+    let mut d = doc(200.0, 100.0);
+    d.raster_effects_ppi = 144.0;
+    add(&mut d, Node::path(NodeId(0), shape.clone(), Appearance::basic(grad(true), grad(true), 4.0)));
+    let pdf = uncompressed(&d).replace(' ', "");
+    assert!(pdf.contains("/Subtype/Image"), "the fill is an image");
+    assert!(pdf.contains("/Width200") && pdf.contains("/Height100"), "two pixels a point at 144 ppi");
+    assert!(pdf.contains("/ShadingType2"), "the stroke keeps its shading");
+    let mut plain = doc(200.0, 100.0);
+    add(&mut plain, Node::path(NodeId(0), shape, Appearance::basic(grad(false), Paint::None, 0.0)));
+    let pdf = uncompressed(&plain).replace(' ', "");
+    assert!(!pdf.contains("/Subtype/Image") && pdf.contains("/ShadingType2"));
+}
+
+/// Illustrator's documentation: perceptual gradients aren't supported in PDF exports, and are
+/// rasterised when saved that way
+/// (https://helpx.adobe.com/illustrator/desktop/paint-and-fill/create-and-edit-gradients/control-perceptual-interpolation-in-gradients.html).
+/// A Perceptual fill and stroke are drawn as images at the raster effects resolution, clipped to
+/// what they paint; a Classic gradient stays a shading, and so does a gradient along a stroke
+/// (slices through stops on the perceptual curve, as the canvas draws it).
+#[test]
+fn perceptual_gradients_export_as_images_and_classic_ones_as_shadings() {
+    let grad = |method| Paint::Gradient(Box::new(GradientPaint::new(Gradient { method, ..Default::default() })));
+    let p = grad(vectorz_color::GradientMethod::Perceptual);
+    let shape = shapes::rectangle(Rect::new(10.0, 10.0, 110.0, 60.0));
+    let mut d = doc(200.0, 100.0);
+    d.raster_effects_ppi = 144.0;
+    add(&mut d, Node::path(NodeId(0), shape.clone(), Appearance::basic(p.clone(), p.clone(), 4.0)));
+    let pdf = uncompressed(&d).replace(' ', "");
+    assert_eq!(pdf.matches("/Subtype/Image").count(), 2, "the fill and the stroke are images");
+    assert!(pdf.contains("/Width200") && pdf.contains("/Height100"), "two pixels a point at 144 ppi");
+    assert!(!pdf.contains("/ShadingType2"), "no shading");
+    let mut along = Appearance::basic(Paint::None, p, 4.0);
+    if let Some(AppearanceItem::Stroke(st)) = along.items.get_mut(1) {
+        st.gradient_mode = vectorz_doc::StrokeGradientMode::Along;
+    }
+    let mut a = doc(200.0, 100.0);
+    add(&mut a, Node::path(NodeId(0), shape.clone(), along));
+    let pdf = uncompressed(&a).replace(' ', "");
+    assert!(!pdf.contains("/Subtype/Image") && pdf.contains("/ShadingType2"), "along the stroke: slices");
+    let c = grad(vectorz_color::GradientMethod::Classic);
+    let mut plain = doc(200.0, 100.0);
+    add(&mut plain, Node::path(NodeId(0), shape, Appearance::basic(c.clone(), c, 4.0)));
+    let pdf = uncompressed(&plain).replace(' ', "");
+    assert!(!pdf.contains("/Subtype/Image") && pdf.contains("/ShadingType2"));
+}
+
+/// A dithered Perceptual gradient: the fill and the stroke are images (Perceptual), and dither
+/// adds its noise to the fill's pixels only.
+#[test]
+fn dithered_perceptual_gradients_export_as_images_with_noise_on_the_fill() {
+    let grad = |dither| {
+        Paint::Gradient(Box::new(GradientPaint::new(Gradient {
+            dither,
+            method: vectorz_color::GradientMethod::Perceptual,
+            ..Default::default()
+        })))
+    };
+    let shape = shapes::rectangle(Rect::new(10.0, 10.0, 110.0, 60.0));
+    let export_with = |dither, stroke: bool| {
+        let mut d = doc(200.0, 100.0);
+        let (fill, stroke) = if stroke { (Paint::None, grad(dither)) } else { (grad(dither), Paint::None) };
+        add(&mut d, Node::path(NodeId(0), shape.clone(), Appearance::basic(fill, stroke, 4.0)));
+        uncompressed(&d).replace(' ', "")
+    };
+    for stroke in [false, true] {
+        let pdf = export_with(true, stroke);
+        assert_eq!(pdf.matches("/Subtype/Image").count(), 1, "stroke {stroke}: an image");
+        assert!(!pdf.contains("/ShadingType"), "stroke {stroke}: no shading");
+    }
+    assert_ne!(export_with(true, false), export_with(false, false), "the fill's pixels carry the noise");
+    assert_eq!(export_with(true, true), export_with(false, true), "a stroke has no dither");
+}
+
+/// COLR glyphs in the PDF: as real text, in their font's Type 3 glyphs (the foreground layer in
+/// the fill); outlined, as vector art, a sweep glyph as an image.
+#[test]
+fn colr_glyphs_export_as_vector_art() {
+    use vectorz_text::test_fonts::{COLOUR_CHAR, COLR_SWEEP_CHAR, colr_family, colr_font};
+    for v1 in [false, true] {
+        vectorz_text::FontDb::global().add_font(colr_font(v1).unwrap());
+    }
+    let page = |v1: bool, ch: char, outline_text: bool| {
+        let mut d = doc(300.0, 100.0);
+        let fill = Paint::solid(Color::rgb(0.0, 0.0, 1.0));
+        let st = CharStyle { font_family: colr_family(v1).into(), size: 24.0, fill, ..CharStyle::default() };
+        add(&mut d, Node::new(NodeId(0), NodeKind::Text(Box::new(TextObject::point(Point::new(10.0, 50.0), &ch.to_string(), st)))));
+        let mut o = PdfOptions::uncompressed();
+        o.settings.advanced.outline_text = outline_text;
+        import_with_report(&export(&d, &o).unwrap(), &ImportOptions::default()).unwrap().document
+    };
+    let fills = |d: &Document| -> Vec<Paint> { leaves(d).iter().map(|n| n.appearance.fill_paint()).collect() };
+    let near =
+        |p: &Paint, rgb: [f32; 3]| matches!(p, Paint::Solid { color, .. } if color.to_rgb().iter().zip(rgb).all(|(a, b)| (a - b).abs() < 0.02));
+    for outline_text in [false, true] {
+        let v0 = fills(&page(false, COLOUR_CHAR, outline_text));
+        assert!(v0.iter().any(|p| near(p, [1.0, 0.0, 0.0])), "the red layer (outlined {outline_text}): {v0:?}");
+        assert!(v0.iter().any(|p| near(p, [0.0, 0.0, 1.0])), "the foreground layer in the fill (outlined {outline_text}): {v0:?}");
+    }
+    let v1 = page(true, COLOUR_CHAR, true);
+    assert!(!leaves(&v1).iter().any(|n| matches!(n.kind, NodeKind::Image(_))), "vector art");
+    assert!(fills(&v1).iter().any(|p| matches!(p, Paint::Gradient(_))), "with its gradients");
+    let sweep = page(true, COLR_SWEEP_CHAR, true);
+    assert!(leaves(&sweep).iter().any(|n| matches!(n.kind, NodeKind::Image(_))), "a sweep glyph is an image");
 }

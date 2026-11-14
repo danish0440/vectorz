@@ -71,7 +71,7 @@ pub(crate) fn shade(c: Color, rgb: [f64; 3]) -> Color {
 pub(crate) fn smooth_paint(g: vectorz_three_d::LightGradient, color: Color) -> Paint {
     use vectorz_doc::color::{Gradient, GradientGeom, GradientKind, GradientPaint, GradientStop};
     let stops = g.stops().into_iter().map(|(at, rgb)| GradientStop::new(at, shade(color, rgb))).collect();
-    let mut p = GradientPaint::new(Gradient { kind: GradientKind::Linear, stops });
+    let mut p = GradientPaint::new(Gradient::new(GradientKind::Linear, stops));
     p.geom = Some(GradientGeom { start: g.diffuse.start, end: g.diffuse.end, aspect: 1.0, focal: None });
     Paint::Gradient(Box::new(p))
 }
@@ -96,6 +96,18 @@ pub(crate) fn rgb_gradient_art(
     composed_art(id, path, paint, Ramp::Rgb(light), 0.75)
 }
 
+/// The narrow stroke of a facet's own `paint`, `width` wide, that closes the hairline seam between
+/// it and its neighbors where each is antialiased alone. Its joins are round: a facet seen almost
+/// edge-on is a sharp sliver, and a mitered seam would reach far past its tip as a thorn, where a
+/// round one reaches no more than half its width past the facet. Revolve's meets() counts on a
+/// stroked seam reaching no more than half its width; faces drawn as clipped groups (whose clip,
+/// in `composed_art`, already outlines the seam with round joins) are measured by their box.
+pub(crate) fn seam_stroke(paint: Paint, width: f64) -> vectorz_doc::StrokeLayer {
+    let mut edge = vectorz_doc::StrokeLayer::new(paint, width);
+    edge.join = vectorz_doc::LineJoin::Round;
+    edge
+}
+
 /// Smooth Inflate triangles keep the seam within their narrow projected footprint.
 pub(crate) fn facet_art(
     id: vectorz_doc::NodeId,
@@ -109,8 +121,7 @@ pub(crate) fn facet_art(
         let light = vectorz_three_d::LightGradient { diffuse: r, ambient: 0.0, color: [1.0; 3] };
         if let Some(color) = paint.color() {
             let paint = smooth_paint(light, color);
-            let mut edge = vectorz_doc::StrokeLayer::new(paint.clone(), seam);
-            edge.join = vectorz_doc::LineJoin::Round;
+            let edge = seam_stroke(paint.clone(), seam);
             return vectorz_doc::Node::path(
                 id,
                 path.clone(),
@@ -131,7 +142,7 @@ pub(crate) fn solid_surface(id: vectorz_doc::NodeId, facets: &[vectorz_three_d::
     use kurbo::Shape;
     use std::sync::Arc;
     use vectorz_doc::color::BlendMode;
-    use vectorz_doc::{Appearance, Node, NodeKind, StrokeLayer};
+    use vectorz_doc::{Appearance, Node, NodeKind};
     use vectorz_geom::{BezPath, PathData, Rect, shapes};
 
     let mut boundary = BezPath::new();
@@ -163,8 +174,7 @@ pub(crate) fn solid_surface(id: vectorz_doc::NodeId, facets: &[vectorz_three_d::
                 } else {
                     Paint::solid(shade(Color::WHITE, color.map(|c| c * face.illumination[channel])))
                 };
-                let mut edge = StrokeLayer::new(paint.clone(), (face.thickness() / 2.0).clamp(0.05, 0.75));
-                edge.join = vectorz_doc::LineJoin::Round;
+                let edge = seam_stroke(paint.clone(), (face.thickness() / 2.0).clamp(0.05, 0.75));
                 Arc::new(Node::path(
                     id,
                     face.path(),
@@ -334,7 +344,7 @@ mod tests {
         stop.opacity = 0.4;
         stop.midpoint = 0.3;
         let g = GradientPaint {
-            gradient: Gradient { kind: GradientKind::Linear, stops: vec![stop, GradientStop::new(1.0, Color::BLACK)] },
+            gradient: Gradient::new(GradientKind::Linear, vec![stop, GradientStop::new(1.0, Color::BLACK)]),
             geom: Some(GradientGeom { start: Point::new(20.0, 30.0), end: Point::new(100.0, 30.0), aspect: 1.0, focal: None }),
             angle: 0.0,
             swatch: None,
