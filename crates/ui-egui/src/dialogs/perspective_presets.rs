@@ -191,11 +191,10 @@ pub(super) fn run(app: &mut VectorzApp, d: &mut Dialog, act: Action, current: &s
         }
         Action::Import => {
             // On the web the picked file arrives later and imports through `io::open_bytes`.
-            if let Some(f) = app.services.open_async.as_mut() {
-                f();
+            if crate::picks::open_async(app) {
                 return Ok(());
             }
-            let pick = crate::FilePick { filters: vec![("Perspective grid presets", PRESET_EXTS)], ..Default::default() };
+            let pick = crate::FilePick { filters: vec![crate::FilePick::filter("Perspective grid presets", PRESET_EXTS)], ..Default::default() };
             let path = crate::picks::open(app, &pick).ok_or("cancelled")?;
             let r = app.run("perspective.presets.import", json!({ "path": path }))?;
             if let Some(first) = r["imported"].get(0).and_then(Value::as_str) {

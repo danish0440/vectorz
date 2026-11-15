@@ -217,7 +217,7 @@ choice! {
 }
 
 /// Save PDF settings (the dialog's sections; what a preset stores).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PdfSettings {
     pub standard: Standard,
@@ -236,6 +236,11 @@ pub struct PdfSettings {
     /// Keep the layers whose Print option is off (they are left out otherwise, unless
     /// `create_layers` is on).
     pub include_non_printing: bool,
+    /// Write a page with a side longer than 14,400 pt (200 in) at its size in points, without a
+    /// `UserUnit`, at every PDF version, in files without a standard (on by default; off, and in
+    /// PDF/A files: PDF 1.6 and later files that aren't PDF/X files write it with a `UserUnit`,
+    /// and PDF 1.5 files are written as PDF 1.6 for it).
+    pub long_pages_in_points: bool,
     pub compression: CompressionSettings,
     pub marks: MarkSettings,
     pub bleed: BleedSettings,
@@ -246,6 +251,29 @@ pub struct PdfSettings {
     /// flattened with: a built-in or saved preset's name; empty, High Resolution. The app flattens
     /// the document before writing; the writer doesn't read it.
     pub flattener_preset: String,
+}
+
+impl Default for PdfSettings {
+    fn default() -> Self {
+        Self {
+            standard: Standard::default(),
+            compatibility: Compatibility::default(),
+            preserve_editing: false,
+            thumbnails: false,
+            fast_web_view: false,
+            view_after_saving: false,
+            create_layers: false,
+            include_non_printing: false,
+            long_pages_in_points: true,
+            compression: CompressionSettings::default(),
+            marks: MarkSettings::default(),
+            bleed: BleedSettings::default(),
+            output: OutputSettings::default(),
+            advanced: AdvancedSettings::default(),
+            security: SecuritySettings::default(),
+            flattener_preset: String::new(),
+        }
+    }
 }
 
 /// Resampling and compression of one kind of image.
@@ -347,12 +375,17 @@ impl BleedSettings {
     }
 }
 
+/// The Output destination that names the CMYK profile of the colour settings in effect, in an RGB
+/// document as in a CMYK one (Illustrator's "Document CMYK"; #2950).
+pub const DOCUMENT_CMYK: &str = "Document CMYK";
+
 /// The Output section.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OutputSettings {
     pub conversion: ColorConversion,
-    /// Destination profile name (empty: the document's profile).
+    /// Destination profile name (empty: the document's profile; [`DOCUMENT_CMYK`]: the CMYK
+    /// profile in effect, whatever the document's colour mode).
     pub destination: String,
     pub profiles: ProfileInclusion,
     /// PDF/X output intent profile name.

@@ -592,6 +592,21 @@ showpage"##;
     assert!(near(bounds(&meshes[1]), Rect::new(150.0, 90.0, 190.0, 140.0)), "{:?}", bounds(&meshes[1]));
 }
 
+/// Ghostscript 9's `eps2write` copies the initial graphics state (`currenthalftone`,
+/// `currentcolortransfer`) into global VM before it draws, with a copier for each composite type.
+/// It copies only what `gcheck` says is in local VM: `gcheck` is true for every simple object
+/// (PLRM 3rd ed., `gcheck`), so the halftone's numbers stay as they are. Written from the PLRM.
+#[test]
+fn gcheck_is_true_for_simple_objects() {
+    super::tests::check("1 gcheck 2.5 gcheck and /n gcheck and true gcheck and null gcheck and /add load gcheck and mark gcheck and");
+    super::tests::check("(s) gcheck not 1 dict gcheck not and {} gcheck not and 1 scheck and (s) scheck not and");
+    super::tests::check(
+        "/copiers << /dicttype { << exch { cp2g } forall >> } /arraytype { [ exch { cp2g } forall ] } >> def \
+         /cp2g { dup gcheck not { copiers 1 index type get exec } if } bind def \
+         currenthalftone cp2g /Frequency get 60 eq [ currentcolortransfer ] cp2g length 4 eq and",
+    );
+}
+
 /// A procset written as the PostScript Language Reference (3rd ed.) describes the Level 2 and 3
 /// facilities programs probe before drawing: a resource category made from `Generic` and
 /// resources defined and found in it (§3.9), local and global VM (`currentglobal`, `setglobal`,
@@ -662,6 +677,10 @@ fn mesh_and_function_shadings_become_gradient_meshes() {
     let NodeKind::Mesh(g) = &m.kind else { panic!() };
     // Its first corner (the domain's origin) is the first sample.
     assert_eq!(g.points[0].color, Color::rgb(1.0, 0.0, 0.0));
+    // Between the samples it is interpolated (PLRM 3rd ed. §3.10.1, type 0 functions), not the
+    // nearest sample: the middle of the 17 × 17 grid is the average of red, green, blue and black.
+    let mid = g.points[8 * 17 + 8].color.to_rgb_uncalibrated();
+    assert!(mid.iter().all(|c| (c - 0.25).abs() < 1e-3), "{mid:?}");
 
     // Type 4 packed: 8-bit flags, coordinates and components; a triangle and one on its edge.
     let tri = [[0u8, 0, 0, 255, 0, 0], [0, 255, 0, 0, 255, 0], [0, 0, 255, 0, 0, 255], [1, 255, 255, 255, 255, 0]].concat();
@@ -733,11 +752,67 @@ fn masked_images_in_every_interleaving() {
 #[test]
 fn errors_name_the_operator_and_the_procedures() {
     let r = read("{ 1 (a) add } stopped pop 0 0 10 10 rectfill /inner { 1 (a) add } def /outer { inner } def outer");
-    assert!(r.warnings[0].contains("(typecheck in `add`), in `inner` in `outer`"), "{:?}", r.warnings);
+    assert!(r.warnings[0].contains("(typecheck in `add`; a value has the wrong type for the operator), in `inner` in `outer`"), "{:?}", r.warnings);
     let r = read("0 0 10 10 rectfill /p { frobnicate } def p");
     assert!(r.warnings[0].contains("it uses `frobnicate`, which VectorZ's PostScript reader doesn't know, in `p`"), "{:?}", r.warnings);
     let r = read("0 0 10 10 rectfill 0 0 moveto (x) cvn moveto");
     assert!(r.warnings[0].contains("typecheck in `moveto`: a number"), "{:?}", r.warnings);
+}
+
+/// The warning for a file read only up to an error says what the error's name means in the
+/// reader, after the name, which stays as PostScript spells it.
+#[test]
+fn errors_say_what_the_postscript_error_means() {
+    for (program, want) in [
+        ("1 (a) add", "(typecheck in `add`; a value has the wrong type for the operator)"),
+        ("[1 2] 5 get", "(rangecheck in `get`; a value is outside the range the operator takes)"),
+        ("add", "(stackunderflow in `add`; the operator needs more values than the stack holds)"),
+        ("1 0 div", "(undefinedresult in `div`; a calculation has no result, as in a division by zero)"),
+        ("newpath 10 10 lineto", "(nocurrentpoint in `lineto`; the path has no point to continue from)"),
+        ("cleartomark", "(unmatchedmark in `cleartomark`; the operator looks for a mark on the stack and finds none)"),
+        ("save dup restore restore", "(invalidrestore in `restore`; the program restores a saved state that was already restored)"),
+        ("(x) (r) file", "(invalidfileaccess in `file`; the program opens a file, which the reader can't do)"),
+        ("(x) run", "(undefinedfilename in `run`; the program runs, deletes or renames a file, which the reader can't do)"),
+        ("/Nope /ProcSet findresource", "(undefinedresource in `findresource`: Nope; the program asks for a resource that isn't defined)"),
+        ("<12", "(syntaxerror in `<`; part of the program isn't valid PostScript text)"),
+    ] {
+        let r = read(&format!("0 0 10 10 rectfill {program}"));
+        assert!(r.warnings[0].contains(want), "{program}: {:?}", r.warnings);
+    }
+}
+
+/// Every PostScript error the reader raises has a meaning in [`crate::POSTSCRIPT_ERRORS`] but
+/// `undefined`, which the warning words on its own.
+#[test]
+fn every_postscript_error_the_reader_raises_has_a_meaning() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("import");
+    let mut raised = std::collections::BTreeSet::new();
+    let mut stack = vec![dir];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !name.ends_with(".rs") || name.starts_with("tests") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for marker in ["Ps(\"", "ps_err(\""] {
+                for (at, _) in text.match_indices(marker) {
+                    let rest = &text[at + marker.len()..];
+                    raised.insert(rest[..rest.find('"').unwrap()].to_string());
+                }
+            }
+        }
+    }
+    assert!(raised.len() >= 15 && raised.contains("typecheck"), "{raised:?}");
+    let missing: Vec<_> = raised.iter().filter(|n| *n != "undefined" && !crate::POSTSCRIPT_ERRORS.iter().any(|(e, _)| e == n)).collect();
+    assert!(missing.is_empty(), "no meaning for {missing:?}");
+    let unused: Vec<_> = crate::POSTSCRIPT_ERRORS.iter().filter(|(e, _)| !raised.contains(*e)).collect();
+    assert!(unused.is_empty(), "never raised: {unused:?}");
 }
 
 /// Operators programs use to probe the interpreter or measure things: file `status`, `token`,
@@ -1053,4 +1128,48 @@ fn restore_puts_dictionaries_back() {
     // `cachestatus` gives a device's cache sizes; its last, the most bytes one cached glyph may
     // take, is positive (chapter 8), and programs divide by it.
     super::tests::check("cachestatus 7 1 roll 6 { pop } repeat 0 gt");
+}
+
+/// #3567: what a `filter` decodes counts against the memory budget, not just its input. A
+/// small string that inflates to 16 MiB, decoded over and over (each result dropped), ends
+/// the program; a single one does not.
+#[test]
+fn filter_output_counts_against_the_memory_budget() {
+    fn hex(data: &[u8]) -> String {
+        data.iter().map(|b| format!("{b:02x}")).collect()
+    }
+    let z = hex(&deflate(&vec![0u8; 16 << 20]));
+    let once = import(&file("t", &format!("/z <{z}> def z /FlateDecode filter pop 0 0 1 1 rectfill"))).unwrap();
+    assert!(once.warnings.iter().all(|w| !w.contains("memory")), "{:?}", once.warnings);
+    let many = import(&file("t", &format!("/z <{z}> def 100 {{ z /FlateDecode filter pop }} repeat 0 0 1 1 rectfill")));
+    let Err(err) = many else { panic!("the budget ends the program") };
+    assert!(err.contains("too much memory"), "{err}");
+}
+
+/// A sampled function of one input in an axial shading: interpolated linearly, its gradient has a
+/// stop at every sample (exact, not sampled evenly); with `Order 3` it is a cubic through the
+/// samples (PLRM 3rd ed. §3.10.1, Table 3.36), kept in its range.
+#[test]
+fn sampled_functions_interpolate_linearly_or_by_cubics() {
+    let shading = |order: &str| {
+        let r = read(&format!(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] /Function << /FunctionType 0 /Domain [0 1] \
+             /Range [0 1] /Size [4] /BitsPerSample 8 {order} /DataSource <00ffff00> >> >> shfill"
+        ));
+        let Some(Paint::Gradient(g)) = all(&r.document).into_iter().find_map(|n| fill(&n).cloned()) else { panic!("no gradient") };
+        g.gradient.stops.iter().map(|s| (s.offset, s.color.to_rgb_uncalibrated()[0])).collect::<Vec<_>>()
+    };
+    let linear = shading("");
+    assert_eq!(linear.len(), 4, "{linear:?}");
+    for ((t, v), (et, ev)) in linear.iter().zip([(0.0, 0.0), (1.0 / 3.0, 1.0), (2.0 / 3.0, 1.0), (1.0, 0.0)]) {
+        assert!((t - et).abs() < 1e-4 && (v - ev).abs() < 1e-3, "{linear:?}");
+    }
+    // Sampled evenly; at 3/32 (0.28 of the way from the first sample to the second) the cubic
+    // through 0, 0, 1 and 1 (the first sample repeated before it) is 0.237, where a straight line
+    // would be 0.281. Between the two white samples it would overshoot past 1, and is kept at 1.
+    let cubic = shading("/Order 3");
+    let at = |t: f32| cubic.iter().find(|s| (s.0 - t).abs() < 1e-4).map(|s| s.1);
+    assert!(at(3.0 / 32.0).is_some_and(|v| (v - 0.237).abs() < 0.01), "{cubic:?}");
+    assert!(cubic.iter().all(|s| (0.0..=1.0).contains(&s.1)), "{cubic:?}");
+    assert!(cubic.iter().any(|s| s.1 == 1.0), "{cubic:?}");
 }

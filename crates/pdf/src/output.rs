@@ -10,15 +10,21 @@
 //!   colours of the other model (and Lab ones), keeping the numbers of those already in it.
 //!   Grey stays grey. Images (and freeform gradients' images) are converted the same way, pixel
 //!   by pixel (CMYK images too: they keep their numbers unless converted, see [`CmykPixels`]);
-//!   printer's marks are not. The destination is a profile name; empty, the document's
-//!   profile for its colour mode.
+//!   printer's marks are not. With `destination` and an sRGB destination, a gray or RGB image
+//!   that carries an ICC profile is converted from it to sRGB with the same intent and written
+//!   without it ([`ColorOut::image_srgb_intent`]); with `destination` and a destination its
+//!   pixels are converted to (CMYK, another RGB space), a colour image is converted from its
+//!   profile to sRGB and then to the destination. Without conversion it keeps its profile. The
+//!   destination is a profile name; empty, the document's profile for its colour mode.
 //! - Profiles ([`ProfileInclusion`]): with `all`, with `destination`, and with `taggedSource` on a
 //!   document that was assigned profiles, colours are written in ICC-based colour spaces: CMYK
 //!   with the CMYK profile in effect (the destination when converting to CMYK, else the
 //!   document's), RGB with sRGB (colours of another RGB space as their sRGB equivalents) and grey
 //!   with the sRGB tone curve. Otherwise they are device colours. PDF/A, PDF/X-3 and PDF/X-4
 //!   always tag them, whatever `profiles` says; PDF/X-1a never does, and always converts to a
-//!   CMYK destination (see [`crate::pdfx`]).
+//!   CMYK destination (see [`crate::pdfx`]). A CMYK image that keeps its numbers is tagged with
+//!   the CMYK profile it carries, if any, with `all` and `taggedSource`, and in PDF/A, PDF/X-3
+//!   and PDF/X-4 unless `profiles` is `destination` ([`ColorOut::cmyk_image_icc`]).
 //! - Output intent: the profile `outputIntent` names, embedded as the `/GTS_PDFX` output intent
 //!   of the catalog with the condition, identifier and registry; Trapped goes in the document
 //!   information (`/False` when an output intent is written untrapped). PDF/A files carry their
@@ -48,6 +54,8 @@ struct Dest {
     keep: bool,
     /// The destination is sRGB (what images are).
     srgb: bool,
+    /// Convert to Destination was asked for (not Preserve Numbers, nor PDF/X-1a's own conversion).
+    destination: bool,
 }
 
 /// How an export writes colours (see the module documentation).
@@ -59,6 +67,9 @@ pub(crate) struct ColorOut {
     dest: Option<Dest>,
     /// Colours are written in ICC-based colour spaces.
     pub tagged: bool,
+    /// CMYK images that keep their numbers are tagged with the CMYK profile they carry
+    /// ([`Self::cmyk_image_icc`]).
+    image_icc: bool,
     /// The CMYK profile that tags CMYK colours.
     cmyk_profile: String,
     /// Tagged RGB colours are written as their sRGB equivalents: why (a warning), when their RGB
@@ -105,6 +116,7 @@ impl Default for ColorOut {
             profile_notes: vec![],
             dest: None,
             tagged: false,
+            image_icc: false,
             cmyk_profile,
             srgb_note: None,
             pixels: OnceLock::new(),
@@ -160,6 +172,8 @@ fn destination(set: &PdfSettings, mode: ColorMode, source: &Cms) -> Result<Optio
     let name = o.destination.trim();
     let fallback = if cmyk_only { crate::pdfx::cmyk_destination(set, source) } else { String::new() };
     let name = match (name.is_empty(), mode) {
+        // Document CMYK: the CMYK profile in effect, in an RGB document too (#2950).
+        (false, _) if name.eq_ignore_ascii_case(crate::DOCUMENT_CMYK) => source.settings().cmyk.as_str(),
         (false, _) => name,
         (true, _) if cmyk_only => fallback.as_str(),
         (true, ColorMode::Cmyk) => source.settings().cmyk.as_str(),
@@ -225,11 +239,12 @@ impl ColorOut {
             };
             let cms = Cms::new(&settings).map_err(|e| PdfError::BadSetting(format!("output.destination: {e}")))?;
             // PDF/X-1a converts without being asked: as Preserve Numbers does.
-            let keep = set.output.conversion != ColorConversion::Destination || cms::canonical_name(&own) == name;
+            let destination = set.output.conversion == ColorConversion::Destination;
+            let keep = !destination || cms::canonical_name(&own) == name;
             if model == Model::Cmyk {
                 out.cmyk_profile = name.clone();
             }
-            out.dest = Some(Dest { srgb: name == cms::SRGB, cms, model, keep });
+            out.dest = Some(Dest { srgb: name == cms::SRGB, cms, model, keep, destination });
         }
         out.tagged = matches!(set.standard, Standard::PdfA2b | Standard::PdfX3 | Standard::PdfX4)
             || (!set.standard.cmyk_only()
@@ -238,6 +253,14 @@ impl ColorOut {
                     ProfileInclusion::All | ProfileInclusion::Destination => true,
                     ProfileInclusion::TaggedSource => !doc.color_profiles.is_empty(),
                 });
+        // Source profiles: with `all` and `taggedSource`, and in the files that tag every colour
+        // unless only the destination profile is asked for; never in PDF/X-1a.
+        out.image_icc = !set.standard.cmyk_only()
+            && match set.output.profiles {
+                ProfileInclusion::All | ProfileInclusion::TaggedSource => true,
+                ProfileInclusion::None => matches!(set.standard, Standard::PdfA2b | Standard::PdfX3 | Standard::PdfX4),
+                ProfileInclusion::Destination => false,
+            };
         let rgb = match &out.dest {
             Some(d) if d.model == Model::Rgb => (d.srgb, d.cms.settings().rgb.clone()),
             _ => (source.rgb_is_srgb(), st.rgb.clone()),
@@ -322,6 +345,28 @@ impl ColorOut {
             .as_ref()
     }
 
+    /// The intent a gray or RGB image that carries an ICC profile is converted from it to sRGB
+    /// with ([`crate::images::recode`]): the colour settings' intent, with Convert to Destination
+    /// and an sRGB destination, also when the document's RGB space is sRGB, or a destination
+    /// colour images' pixels are then converted to ([`Self::pixels`]: CMYK, another RGB space).
+    /// `None` otherwise, Preserve Numbers and an RGB destination that is the document's own RGB
+    /// profile (which leaves RGB colours and RGB images as they are) included: such an image
+    /// keeps its profile, or its numbers are converted as sRGB ones.
+    pub(crate) fn image_srgb_intent(&self) -> Option<Intent> {
+        let d = self.dest.as_ref().filter(|d| d.destination)?;
+        ((d.model == Model::Rgb && d.srgb) || self.pixels().is_some()).then_some(self.intent)
+    }
+
+    /// The CMYK profile CMYK image `blob` is tagged with ([`crate::images::cmyk_icc`]): the one it
+    /// carries, when its numbers are kept and the Profiles setting or the standard includes source
+    /// profiles. `None` otherwise, and in PDF/X-1a, whose images are untagged CMYK.
+    pub(crate) fn cmyk_image_icc(&self, blob: &vectorz_doc::ImageBlob) -> Option<Vec<u8>> {
+        if !self.image_icc || self.cmyk_pixels().is_some() {
+            return None;
+        }
+        crate::images::cmyk_icc(blob)
+    }
+
     /// How CMYK images' ink amounts are converted; `None` when they keep their numbers (no
     /// conversion, or to a CMYK destination that keeps them).
     pub(crate) fn cmyk_pixels(&self) -> Option<&CmykPixels> {
@@ -347,15 +392,18 @@ impl ColorOut {
     }
 
     /// `pdf` with the output intent and Trapped entries, and a PDF/X file's identification
-    /// ([`crate::pdfx`]) → (the file, warnings).
-    pub(crate) fn write_catalog(&self, pdf: Vec<u8>) -> Result<(Vec<u8>, Vec<String>), PdfError> {
-        let Some(cat) = &self.catalog else { return Ok((pdf, vec![])) };
+    /// ([`crate::pdfx`]) → (the file, notes on the output intent asked for).
+    pub(crate) fn write_catalog(&self, pdf: Vec<u8>, display_doc_title: bool) -> Result<(Vec<u8>, Vec<String>), PdfError> {
+        let cat = self.catalog.as_ref();
+        if cat.is_none() && !display_doc_title {
+            return Ok((pdf, vec![]));
+        }
         let xref = Xref::read(&pdf).ok_or_else(|| PdfError::Write("the written PDF has no cross-reference table".into()))?;
         let mut patch = Patch::new(&xref);
         let mut warnings = vec![];
         let root = xref.trailer_ref(&pdf, b"/Root").and_then(|n| xref.dict(&pdf, n));
         let Some(root) = root else { return Err(PdfError::Write("the written PDF has no catalog".into())) };
-        if let Some(OutputIntent { id, condition, registry, info, profile }) = &cat.intent {
+        if let Some(OutputIntent { id, condition, registry, info, profile }) = cat.and_then(|c| c.intent.as_ref()) {
             if crate::lab_spot::find(pdf.get(root.0..root.1).unwrap_or_default(), b"/OutputIntents", 0).is_some() {
                 warnings.push("the file has an output intent already: the one asked for is left out".into());
             } else {
@@ -386,9 +434,12 @@ impl ColorOut {
                 patch.replace(root.0, root.0, format!("/OutputIntents[{oi} 0 R]").into_bytes());
             }
         }
+        if display_doc_title && crate::lab_spot::find(pdf.get(root.0..root.1).unwrap_or_default(), b"/ViewerPreferences", 0).is_none() {
+            patch.replace(root.0, root.0, b"/ViewerPreferences<</DisplayDocTitle true>>".to_vec());
+        }
         let info = xref.trailer_ref(&pdf, b"/Info").and_then(|n| xref.dict(&pdf, n));
         let mut entries = String::new();
-        if let Some(trapped) = cat.trapped
+        if let Some(trapped) = cat.and_then(|c| c.trapped)
             && info.is_none_or(|(s, e)| crate::lab_spot::find(pdf.get(s..e).unwrap_or_default(), b"/Trapped", 0).is_none())
         {
             entries.push_str(if trapped { "/Trapped/True" } else { "/Trapped/False" });
@@ -402,7 +453,7 @@ impl ColorOut {
                 patch.trailer_entry(format!("/Info {n} 0 R").as_bytes());
             }
         }
-        crate::pdfx::xmp(&pdf, &xref, root, &mut patch, self.standard, cat.trapped == Some(true))?;
+        crate::pdfx::xmp(&pdf, &xref, root, &mut patch, self.standard, cat.and_then(|c| c.trapped) == Some(true))?;
         Ok((patch.apply(&pdf, &xref)?, warnings))
     }
 }
@@ -469,7 +520,7 @@ fn catalog(set: &PdfSettings, cmyk_profile: &str) -> Option<Catalog> {
 
 /// The object number of the stream of an ICC-based colour space of `pdf` that holds profile `icc`
 /// (its data as it is, or Flate-compressed); `None` when no colour space uses that profile.
-fn tagging_stream(pdf: &[u8], xref: &Xref, icc: &[u8]) -> Option<u32> {
+pub(crate) fn tagging_stream(pdf: &[u8], xref: &Xref, icc: &[u8]) -> Option<u32> {
     use std::io::Read;
     const ICC: &[u8] = b"[/ICCBased ";
     let mut from = 0;

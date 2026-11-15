@@ -1,8 +1,8 @@
 //! The Blend panel drawn headless: Window › Blend opens it, and its controls do nothing until the
 //! selection allows them. Make needs two or more objects, Spacing and Orientation need a blend or
-//! two or more objects, and the other buttons need a blend. Make blends the selection, Spacing and
-//! Orientation edit the selected blend through `object.blend.options`, and each other button runs
-//! its Object › Blend command.
+//! two or more objects, and the other buttons need a blend. Make blends the selection, Create Spine
+//! sets whether new blends get a spine, Spacing and Orientation edit the selected blend through
+//! `object.blend.options`, and each other button runs its Object › Blend command.
 
 use egui::{Event, Pos2, Rect, pos2, vec2};
 use serde_json::json;
@@ -39,6 +39,11 @@ impl Frames {
 
     /// The center of the text `label` the panel draws.
     fn text(&mut self, app: &mut VectorzApp, label: &str) -> Pos2 {
+        self.find_text(app, label).unwrap_or_else(|texts| panic!("no {label:?} in {texts:?}"))
+    }
+
+    /// The center of the text `label` the panel draws, or every text it draws.
+    fn find_text(&mut self, app: &mut VectorzApp, label: &str) -> Result<Pos2, Vec<(String, Rect)>> {
         self.run(app, vec![]);
         let out = self.run(app, vec![]);
         let mut texts = vec![];
@@ -50,7 +55,7 @@ impl Frames {
             }
         }
         out.shapes.iter().for_each(|c| collect(&c.shape, &mut texts));
-        texts.iter().find(|(t, _)| t == label).unwrap_or_else(|| panic!("no {label:?} in {texts:?}")).1.center()
+        texts.iter().find(|(t, _)| t == label).map(|(_, r)| r.center()).ok_or(texts)
     }
 
     /// The center of the button that screen readers name `label`.
@@ -122,9 +127,21 @@ fn window_blend_opens_the_panel() {
     assert_eq!(item.command.as_deref(), Some("window.panel"));
     assert_eq!(item.params, json!({"panel": ID, "toggle": true}));
     crate::menus::invoke(&mut app, "window.panel", item.params.clone());
-    assert_eq!(app.ui.open_panel.as_deref(), Some(ID));
+    assert!(crate::panel_docking::showing(&app.ui, ID));
     let text = crate::tests_labels::painted_text(&mut app, |app, ui| super::show_icon_panel(app, ui, ID));
-    for label in ["Make", "Spacing:", "Orientation:", "Direction:", "Reverse Front to Back", "Reverse Spine", "Replace Spine", "Expand", "Release"] {
+    for label in [
+        "Make",
+        "Create Spine:",
+        "Auto",
+        "Spacing:",
+        "Orientation:",
+        "Direction:",
+        "Reverse Front to Back",
+        "Reverse Spine",
+        "Replace Spine",
+        "Expand",
+        "Release",
+    ] {
         assert!(text.contains(label), "{label} in {text}");
     }
     assert!(!text.contains("on the roadmap"), "{text}");
@@ -224,4 +241,71 @@ fn each_button_runs_its_blend_command() {
     f.click_text(&mut app, "Release");
     let objects = top(&app);
     assert!(objects.len() >= 2 && objects.iter().all(|(_, blend)| !blend), "the keys are back: {objects:?}");
+}
+
+#[test]
+fn create_spine_sets_what_new_blends_get_whatever_is_selected() {
+    let (mut app, id) = blended();
+    let (before, depth) = (spec(&app, id), undo_depth(&app));
+    let mode = |app: &mut VectorzApp| app.session.execute("object.blend.createSpine", &json!({})).unwrap()["mode"].clone();
+    let mut f = Frames::new();
+    f.text(&mut app, "Create Spine:");
+    f.click_text(&mut app, "Auto");
+    f.click_text(&mut app, "Never");
+    assert_eq!(mode(&mut app), "never");
+    assert_eq!((spec(&app, id), undo_depth(&app)), (before, depth), "the selected blend and the undo history stay as they were");
+    f.text(&mut app, "Never");
+    // Nothing selected: the dropdown still shows and sets the setting.
+    app.run("select.none", json!({})).unwrap();
+    f.click_text(&mut app, "Never");
+    f.click_text(&mut app, "Always");
+    assert_eq!(mode(&mut app), "always");
+    f.click_text(&mut app, "Always");
+    f.click_text(&mut app, "Never");
+    // A blend made now has no spine: Reverse Spine and easing are dimmed for it.
+    app.run("edit.undo", json!({})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    f.click_text(&mut app, "Make");
+    let (g, blend) = top(&app)[0];
+    assert!(blend && spec(&app, g).no_spine, "{:?}", top(&app));
+    let made = spec(&app, g);
+    let depth = undo_depth(&app);
+    f.click_text(&mut app, "Reverse Spine");
+    f.click_text(&mut app, "Ease In");
+    assert!(f.find_text(&mut app, "Ease Out In").is_err(), "the Type menu did not open");
+    assert_eq!((spec(&app, g), undo_depth(&app), app.ui.status.as_str()), (made, depth, ""), "nothing ran");
+}
+
+#[test]
+fn panel_easing_type_ramp_and_shift_edit_the_blend_and_undo() {
+    // Type and Ramp need a spine: Align to Path gives the blend one.
+    let mut app = app();
+    let id = NodeId(app.run("object.blend.make", json!({"smooth": true, "orientation": "path"})).unwrap()["id"].as_u64().unwrap());
+    let mut f = Frames::new();
+    for label in ["Type:", "Ease In", "Ramp:", "Shift:"] {
+        f.text(&mut app, label);
+    }
+    f.click_text(&mut app, "Ease In");
+    f.click_text(&mut app, "Ease Out In");
+    assert_eq!(spec(&app, id).ease.kind, vectorz_doc::BlendEaseType::OutIn);
+    // Click each real slider: its command updates the engine, and Undo restores the old value.
+    for (index, key) in [(0, "ramp"), (1, "colorShift")] {
+        let out = f.run(&mut app, vec![]);
+        let nodes = &out.platform_output.accesskit_update.as_ref().unwrap().nodes;
+        let mut sliders: Vec<_> = nodes.iter().filter(|(_, n)| n.role() == egui::accesskit::Role::Slider).collect();
+        // The tree is not in layout order: Ramp sits above Shift.
+        sliders.sort_by(|a, b| a.1.bounds().unwrap().y0.total_cmp(&b.1.bounds().unwrap().y0));
+        let slider = sliders[index];
+        let b = slider.1.bounds().unwrap();
+        let at = pos2((b.x0 + 0.3 * (b.x1 - b.x0)) as f32, ((b.y0 + b.y1) * 0.5) as f32);
+        let before = app.session.execute("object.blend.info", &json!({})).unwrap()[key].clone();
+        f.click(&mut app, at);
+        let after = app.session.execute("object.blend.info", &json!({})).unwrap()[key].clone();
+        assert_ne!(after, before, "{key}");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.execute("object.blend.info", &json!({})).unwrap()[key], before);
+    }
+    app.run("ui.blendOptions", json!({})).unwrap();
+    let text = crate::tests_labels::painted_text(&mut app, |app, ui| crate::dialogs::show(app, ui.ctx()));
+    assert!(!text.contains("Ease In:") && !text.contains("Ramp:") && !text.contains("Color Ease"), "{text}");
 }
