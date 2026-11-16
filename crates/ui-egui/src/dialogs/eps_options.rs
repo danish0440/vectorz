@@ -25,11 +25,12 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
     ok: Some("Export"),
     min_width: 420.0,
     max_width: Some(460.0),
+    inputs: |_| &["path"],
     ..DialogSpec::FORM
 };
 
 /// Fields that are not remembered between exports (they belong to one export).
-const PER_EXPORT: [&str; 7] = ["format", "path", "useArtboards", "range", "artboard", "artboards", "selectedOnly"];
+const PER_EXPORT: [&str; 8] = ["format", "path", "useArtboards", "range", "artboard", "artboards", "selectedOnly", super::export_as::SELECTION_FIELD];
 
 /// The options a first EPS Options dialog starts from (the export's defaults).
 fn defaults() -> Map<String, Value> {
@@ -132,5 +133,5 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
         Value::Object(d.fields.iter().filter(|(k, _)| !PER_EXPORT.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect());
     app.ui.dialog = None;
     let path = d.fields.get("path").and_then(Value::as_str).map(str::to_string);
-    io::export(app, Some("eps"), path, &params)
+    io::export(app, Some("eps"), path, &super::export_as::exported(d, params))
 }

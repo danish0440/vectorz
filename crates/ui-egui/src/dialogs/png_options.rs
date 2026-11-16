@@ -18,7 +18,8 @@ use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::{VectorzApp, io, widgets};
 
-pub(super) const SPEC: DialogSpec = DialogSpec { heading, body, confirm, ok: Some("Export"), min_width: 360.0, ..DialogSpec::FORM };
+pub(super) const SPEC: DialogSpec =
+    DialogSpec { heading, body, confirm, ok: Some("Export"), min_width: 360.0, inputs: |_| &["path"], ..DialogSpec::FORM };
 
 /// Resolution presets (pixels per inch).
 pub(super) const RESOLUTIONS: [f64; 3] = [72.0, 150.0, 300.0];
@@ -52,7 +53,11 @@ fn format_of(d: &Dialog) -> Option<&'static Format> {
 /// Open the options of raster format `f` for an export whose params (format, path, artboard
 /// choice) are `params`.
 pub fn open(app: &mut VectorzApp, f: &Format, mut params: Value) {
-    let size = app.session.active().and_then(|st| export_size(&st.doc, &params));
+    let selection = params[super::export_as::SELECTION_FIELD] == true;
+    let size = app.session.active().and_then(|st| match selection {
+        true => vectorz_engine::cmd::fileio::selection_doc(st, "document.exportSelection", false).ok().map(|(_, r)| (r.width(), r.height())),
+        false => export_size(&st.doc, &params),
+    });
     if let Some(o) = params.as_object_mut() {
         o.insert("ppi".into(), json!(72));
         o.extend(defaults(app, f));
@@ -143,9 +148,9 @@ fn body(_: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
                 d.fields.insert("__otherPpi".into(), json!(i == 3));
             }
             if preset.is_none()
-                && let Some(v) = widgets::plain_field(ui, "ro-ppi-other", ppi, " ppi", 0, 80.0)
+                && let Some(v) = widgets::range_field(ui, "ro-ppi-other", ppi, 1.0..=4608.0, " ppi", 0, 80.0)
             {
-                d.fields.insert("ppi".into(), json!(v.round().clamp(1.0, 4608.0)));
+                d.fields.insert("ppi".into(), json!(v));
             }
         });
         ui.end_row();
@@ -339,5 +344,9 @@ pub(super) fn choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str, ids: &[&str],
 fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let (format, path) = (d.str("format"), d.str("path"));
     app.ui.dialog = None;
-    io::export(app, Some(&format), Some(path), &form::params(d))
+    let mut params = form::params(d);
+    if format == "psd" {
+        psd_options::drop_unused(&mut params);
+    }
+    io::export(app, Some(&format), Some(path), &super::export_as::exported(d, params))
 }

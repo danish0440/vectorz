@@ -9,16 +9,23 @@ description = "VectorZ Encapsulated PostScript: a hand-written EPS writer (PostS
 workspace = true
 
 [dependencies]
+craft-eps = { workspace = true }
 vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
 vectorz-effects = { workspace = true }
+# The editing data for other apps writes clipped art cut to its clipping path.
+vectorz-pathops = { workspace = true }
 vectorz-brush = { workspace = true }
 vectorz-text = { workspace = true }
+# The glyph outlines of Type 42 fonts a composite font shows.
+skrifa = { workspace = true }
 # Windows metafile previews, opened when a file's PostScript can't be read.
 vectorz-metafile = { workspace = true }
 # Non-native art in Illustrator editing data (a placed PDF's content, kept as a PDF).
 vectorz-pdf = { workspace = true }
+# The predefined CMaps that strings of legacy type in CJK fonts are decoded by.
+craft-pdf = { workspace = true }
 # The TIFF writer (previews) and PackBits, shared with raster export.
 vectorz-render = { workspace = true }
 kurbo = { workspace = true }
@@ -29,8 +36,13 @@ ruzstd = { workspace = true }
 hayro-ccitt = { workspace = true }
 # Live effects' params, as the art styles that name them give them.
 serde_json = { workspace = true }
+# Substring search for PostScript `search`.
+memchr = { workspace = true }
+# Names in legacy .ai files that aren't UTF-8, read in the encoding the user picks.
+encoding_rs = { workspace = true }
 
 [dev-dependencies]
 vectorz-testkit = { workspace = true }
+vectorz-text = { workspace = true, features = ["test-fonts"] }
 # Tests: a Group 4 encoder and the T.4 run codes, to write CCITT test images.
 fax = "0.2"

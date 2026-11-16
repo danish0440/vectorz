@@ -8,6 +8,10 @@ description = "VectorZ document model: artboards, layers, objects, appearance (p
 [lints]
 workspace = true
 
+[features]
+# `vectorz_doc::blend::spines_built` for other crates' tests (dev-dependencies only).
+spine-count = []
+
 [dependencies]
 vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
@@ -20,6 +24,7 @@ zune-jpeg = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 jpeg-encoder = { workspace = true }
