@@ -1,6 +1,7 @@
 //! ICC profiles through `moxcms` (pure Rust): built-in RGB spaces and user-supplied `.icc` files,
 //! and the profiles exports embed ([`encode_builtin`]), written in code from the CMS.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use moxcms::{
@@ -8,7 +9,7 @@ use moxcms::{
     RenderingIntent, ToneReprCurve, TransformF32Executor, TransformOptions, Vector3d,
 };
 
-use super::{CmsError, Intent, ProfileKind, lab};
+use super::{CmsError, Intent, ProfileKind, lab, profiles_generation};
 
 fn moxcms_intent(i: Intent) -> RenderingIntent {
     match i {
@@ -27,12 +28,28 @@ fn intent_index(i: Intent) -> usize {
 
 type Xf = Option<Arc<TransformF32Executor>>;
 
-/// A direct transform's cache key: destination name, intent index, black-point compensation.
-type DirectKey = (String, usize, bool);
+/// A direct transform's cache key: destination [`IccProfile::id`], [`profiles_generation`] it was
+/// built in, intent index, black-point compensation. The id tells a reloaded profile from the old
+/// one of the same name, which settings built before the reload still convert into; the
+/// generation only lets the cache drop what reloads left behind.
+type DirectKey = (u64, u64, usize, bool);
+
+/// The transforms of [`IccProfile::to_same_model_of`]: into ProPhoto RGB's primaries with linear
+/// tone curves, where black-point compensation is a linear remap, and from there into the
+/// destination.
+struct SameModel {
+    into: Arc<TransformF32Executor>,
+    out_of: Arc<TransformF32Executor>,
+    /// The source's and the destination's black as luminance in the linear space (both 0 without
+    /// compensation).
+    black: [f32; 2],
+}
 
 /// A parsed ICC profile plus lazily-built transforms to/from sRGB.
 pub struct IccProfile {
     pub name: String,
+    /// Unique to this instance: never reused, unlike its name or address.
+    id: u64,
     pub kind: ProfileKind,
     /// The file it was loaded from (empty for profiles made in code).
     source: Vec<u8>,
@@ -43,6 +60,9 @@ pub struct IccProfile {
     /// Direct transforms into other RGB profiles ([`Self::to_rgb_of`]), by destination, intent
     /// and black-point compensation.
     direct: Mutex<Vec<(DirectKey, Option<Arc<Direct>>)>>,
+    /// Transforms into other profiles of the same model ([`Self::to_same_model_of`]), keyed as
+    /// [`Self::direct`] is.
+    same_model: Mutex<Vec<(DirectKey, Option<Arc<SameModel>>)>>,
 }
 
 /// A transform from one profile into an RGB profile without passing through sRGB: into the
@@ -82,8 +102,10 @@ impl IccProfile {
             other => return Err(CmsError::Unsupported(format!("profile colour space {other:?} is not RGB, CMYK or Gray"))),
         };
         let name = name.or_else(|| text(&profile.description)).unwrap_or_else(|| format!("Untitled {kind:?} profile"));
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         Ok(Self {
             name,
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             kind,
             source: Vec::new(),
             profile,
@@ -91,10 +113,20 @@ impl IccProfile {
             to_srgb: Default::default(),
             from_srgb: Default::default(),
             direct: Mutex::new(Vec::new()),
+            same_model: Mutex::new(Vec::new()),
         })
     }
 
     pub fn from_bytes(name: Option<String>, bytes: &[u8]) -> Result<Self, CmsError> {
+        if !localized_text_fits(bytes) {
+            return Err(CmsError::BadProfile(format!("its localized names take more than {} KB", MAX_LOCALIZED_TEXT >> 10)));
+        }
+        if let Some(tag) = repeated_tag(bytes) {
+            return Err(CmsError::BadProfile(format!(
+                "its tag table lists the `{}` tag more than once",
+                String::from_utf8_lossy(&tag.to_be_bytes())
+            )));
+        }
         let p = ColorProfile::new_from_slice(bytes).map_err(|e| CmsError::BadProfile(format!("{e:?}")))?;
         Ok(Self { source: bytes.to_vec(), ..Self::from_profile(name, p)? })
     }
@@ -138,12 +170,36 @@ impl IccProfile {
 
     /// Device values (RGB / CMYK / Gray, 0..1) → sRGB.
     pub fn to_srgb(&self, v: &[f32], intent: Intent) -> Option<[f32; 3]> {
+        let mut src = [0.0f32; 4];
+        let channels = self.channels();
+        src.get_mut(..channels)?.iter_mut().zip(v.iter()).for_each(|(dst, value)| *dst = *value);
+        self.to_srgb_into(src.get(..channels)?, intent)
+    }
+
+    /// Convert an exact-width device pixel using the cached transform and stack storage.
+    pub fn to_srgb_into(&self, v: &[f32], intent: Intent) -> Option<[f32; 3]> {
+        if v.len() != self.channels() {
+            return None;
+        }
         let xf = self.to_xf(intent)?;
-        let mut src = v.to_vec();
-        src.resize(self.channels(), 0.0);
         let mut dst = [0.0f32; 3];
-        xf.transform(&src, &mut dst).ok()?;
+        xf.transform(v, &mut dst).ok()?;
         Some(dst.map(|x| x.clamp(0.0, 1.0)))
+    }
+
+    /// Device pixels `v` (RGB / CMYK / Gray, 0..1, the profile's channels a pixel, any number of
+    /// pixels) → sRGB in `dst` (three values a pixel), converted with `intent` in one pass of the
+    /// cached transform. `None` when `v` doesn't hold whole pixels, `dst` doesn't hold three values
+    /// for each, or no transform can be built.
+    pub fn to_srgb_pixels(&self, v: &[f32], dst: &mut [f32], intent: Intent) -> Option<()> {
+        let n = self.channels();
+        if !v.len().is_multiple_of(n) || dst.len() != v.len() / n * 3 {
+            return None;
+        }
+        let xf = self.to_xf(intent)?;
+        xf.transform(v, dst).ok()?;
+        dst.iter_mut().for_each(|x| *x = x.clamp(0.0, 1.0));
+        Some(())
     }
 
     /// sRGB → device values.
@@ -179,8 +235,11 @@ impl IccProfile {
         if dest.kind != ProfileKind::Rgb {
             return None;
         }
-        let key = (dest.name.clone(), intent_index(intent), bpc);
+        let generation = profiles_generation();
+        let key = (dest.id, generation, intent_index(intent), bpc);
         let mut cache = self.direct.lock().unwrap_or_else(|e| e.into_inner());
+        // an older generation's entries can't match again: drop them so reloads don't pile up
+        cache.retain(|(k, _)| k.1 == generation);
         if let Some((_, t)) = cache.iter().find(|(k, _)| *k == key) {
             return t.clone();
         }
@@ -218,6 +277,69 @@ impl IccProfile {
             0.0
         };
         Some(Direct { to_linear, to_dest: Some(to_dest), black })
+    }
+
+    /// Device values of this profile → device values of `dest`, a profile of the same model,
+    /// converted with `intent` through ProPhoto RGB rather than sRGB, so colours outside sRGB
+    /// keep their place. With `bpc` (and an intent other than absolute), this profile's black
+    /// maps onto the destination's black (black-point compensation). `None` when `dest` is of
+    /// another model or no transform can be built.
+    pub fn to_same_model_of(&self, dest: &IccProfile, v: &[f32], intent: Intent, bpc: bool) -> Option<Vec<f32>> {
+        if dest.kind != self.kind || v.len() != self.channels() {
+            return None;
+        }
+        let bpc = bpc && intent != Intent::AbsoluteColorimetric;
+        let generation = profiles_generation();
+        let key = (dest.id, generation, intent_index(intent), bpc);
+        let t = {
+            let mut cache = self.same_model.lock().unwrap_or_else(|e| e.into_inner());
+            cache.retain(|(k, _)| k.1 == generation);
+            match cache.iter().find(|(k, _)| *k == key) {
+                Some((_, t)) => t.clone(),
+                None => {
+                    let t = self.build_same_model(dest, intent, bpc).map(Arc::new);
+                    cache.push((key, t.clone()));
+                    t
+                }
+            }
+        }?;
+        let mut lin = [0.0f32; 3];
+        t.into.transform(v, &mut lin).ok()?;
+        let [from, to] = t.black;
+        if from > 0.0 || to > 0.0 {
+            lin = lin.map(|x| to + (x - from) * (1.0 - to) / (1.0 - from));
+        }
+        let lin = lin.map(|x| x.clamp(0.0, 1.0));
+        let mut out = vec![0.0f32; dest.channels()];
+        t.out_of.transform(&lin, &mut out).ok()?;
+        Some(out.into_iter().map(|x| x.clamp(0.0, 1.0)).collect())
+    }
+
+    fn build_same_model(&self, dest: &IccProfile, intent: Intent, bpc: bool) -> Option<SameModel> {
+        let mut linear = rgb_space(super::PROPHOTO_RGB)?;
+        for trc in [&mut linear.red_trc, &mut linear.green_trc, &mut linear.blue_trc] {
+            *trc = Some(ToneReprCurve::Parametric(vec![1.0]));
+        }
+        linear.cicp = None;
+        let into = self.profile.create_transform_f32(self.layout(), &linear, Layout::Rgb, Self::opts(intent)).ok()?;
+        let out_of = linear.create_transform_f32(Layout::Rgb, &dest.profile, dest.layout(), Self::opts(intent)).ok()?;
+        let black = if bpc {
+            // Each profile's black: the darkest colour it reproduces, found as `build_direct`
+            // finds it, as luminance in the linear space.
+            let luminance = |p: &IccProfile, xf: &Arc<TransformF32Executor>| -> Option<f32> {
+                let inks = p.from_srgb([0.0; 3], Intent::RelativeColorimetric)?;
+                let mut lin = [0.0f32; 3];
+                xf.transform(&inks, &mut lin).ok()?;
+                let y = |c: &moxcms::Xyzd| c.y as f32;
+                let lum = lin[0] * y(&linear.red_colorant) + lin[1] * y(&linear.green_colorant) + lin[2] * y(&linear.blue_colorant);
+                Some(lum.clamp(0.0, 0.5))
+            };
+            let back = dest.profile.create_transform_f32(dest.layout(), &linear, Layout::Rgb, Self::opts(intent)).ok()?;
+            [luminance(self, &into)?, luminance(dest, &back)?]
+        } else {
+            [0.0; 2]
+        };
+        Some(SameModel { into, out_of, black })
     }
 
     /// Whether transforms can be built for this profile (checked at registration).
@@ -392,4 +514,54 @@ pub(super) fn gray_profile(name: &str) -> ColorProfile {
     let mut p = ColorProfile::new_gray_with_gamma(2.2);
     p.gray_trc = ColorProfile::new_srgb().red_trc;
     labelled(p, name)
+}
+
+/// The first tag signature the tag table of ICC `bytes` lists twice, which the ICC
+/// specification forbids. moxcms parses every entry of the table, so a profile listing one
+/// description, copyright or table tag thousands of times, each pointing at the same large data,
+/// would decode and copy that data once per entry. A table it can't read is left to moxcms.
+pub(crate) fn repeated_tag(bytes: &[u8]) -> Option<u32> {
+    let be32 = |at: usize| bytes.get(at..at.checked_add(4)?).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]));
+    let tags = be32(128)? as usize;
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..tags {
+        let sig = be32(i.checked_mul(12)?.checked_add(132)?)?;
+        if !seen.insert(sig) {
+            return Some(sig);
+        }
+    }
+    None
+}
+
+/// Most bytes of UTF-16 the localized names (`mluc` tags) of a profile may take together.
+const MAX_LOCALIZED_TEXT: usize = 1 << 20;
+
+/// Whether the localized-name records of the `mluc` tags in ICC `bytes` take at most
+/// [`MAX_LOCALIZED_TEXT`] together. moxcms copies each record into a string of its own, and records
+/// may all point at the same bytes, so a profile under a megabyte could make it allocate
+/// gigabytes. A table it can't read is left to moxcms to refuse.
+pub(crate) fn localized_text_fits(bytes: &[u8]) -> bool {
+    let be32 = |b: &[u8], at: usize| b.get(at..at.checked_add(4)?).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) as usize);
+    let Some(tags) = be32(bytes, 128) else { return true };
+    let mut total = 0usize;
+    for i in 0..tags {
+        let Some(entry) = i.checked_mul(12).and_then(|e| e.checked_add(132)) else { return false };
+        let (Some(offset), Some(size)) = (be32(bytes, entry + 4), be32(bytes, entry + 8)) else { break };
+        let Some(tag) = offset.checked_add(size).and_then(|end| bytes.get(offset..end)) else { continue };
+        if !tag.starts_with(b"mluc") {
+            continue;
+        }
+        let records = be32(tag, 8).unwrap_or(0);
+        for r in 0..records {
+            // Each record's header: language, country, length, offset.
+            let Some(length) = r.checked_mul(12).and_then(|h| be32(tag, h + 16 + 4)) else { break };
+            // Each record counts its 12-byte header too: records of length 0 are not free, so
+            // many tags pointing at one `mluc` can't make this loop quadratic.
+            total = total.saturating_add(length).saturating_add(12);
+            if total > MAX_LOCALIZED_TEXT {
+                return false;
+            }
+        }
+    }
+    true
 }

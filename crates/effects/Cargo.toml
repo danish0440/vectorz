@@ -15,9 +15,19 @@ vectorz-doc = { workspace = true }
 vectorz-pathops = { workspace = true }
 vectorz-text = { workspace = true }
 vectorz-plugins = { workspace = true }
+vectorz-trace = { workspace = true }
 image = { workspace = true }
+craft-image-codecs = { workspace = true }
 kurbo = { workspace = true }
+# Effect › SVG Filters draws its filters with craft-svg's resvg (`tree-render`).
+craft-svg = { workspace = true, features = ["tree-render"] }
+# The number lists of filter attributes, read as usvg reads them (MIT OR Apache-2.0; already used by usvg).
+svgtypes = "0.16"
 serde_json = { workspace = true }
 
 [dev-dependencies]
 vectorz-color = { workspace = true }
+# A face built in code from the bundled Source Sans 3 (no font file is committed).
+vectorz-text = { workspace = true, features = ["test-fonts"] }
+# Test live-effect plug-ins written in WebAssembly text.
+wat = { workspace = true }

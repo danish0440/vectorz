@@ -73,8 +73,8 @@ fn number(ui: &mut Ui, fields: &mut serde_json::Map<String, Value>, key: &str, l
     let mut changed = false;
     widgets::label_row(ui, tl!(label), 96.0, |ui| {
         let value = fields.get(key).and_then(Value::as_f64).unwrap_or_default();
-        if let Some(v) = widgets::plain_field(ui, ("dimension", key), value, suffix, 2, 90.0) {
-            fields.insert(key.into(), json!(v.clamp(range.0, range.1)));
+        if let Some(v) = widgets::range_field(ui, ("dimension", key), value, range.0..=range.1, suffix, 2, 90.0) {
+            fields.insert(key.into(), json!(v));
             changed = true;
         }
     });
@@ -100,10 +100,12 @@ fn precision(ui: &mut Ui, fields: &mut serde_json::Map<String, Value>, id: &str)
     let before = fields.get("precision").and_then(Value::as_u64).unwrap_or(2) as u32;
     let mut value = before;
     ui.label(tl!("Precision:"));
-    egui::ComboBox::from_id_salt(id).selected_text(value.to_string()).width(55.0).show_ui(ui, |ui| {
-        for n in 0..=6 {
-            ui.selectable_value(&mut value, n, n.to_string());
-        }
+    ui.name_inputs(tl!("Precision"), |ui| {
+        craft_ui::ComboBox::from_id_salt(id).selected_text(value.to_string()).width(55.0).show_ui(ui, |ui| {
+            for n in 0..=6 {
+                ui.selectable_value(&mut value, n, n.to_string());
+            }
+        });
     });
     fields.insert("precision".into(), json!(value));
     value != before
@@ -129,15 +131,22 @@ fn body(app: &mut VectorzApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.horizontal(|ui| {
             widgets::label_row(ui, tl!("Scale:"), 96.0, |ui| {
                 let mut scale = f.get("scale").and_then(Value::as_str).unwrap_or_default().to_owned();
-                if ui.add(egui::TextEdit::singleline(&mut scale).desired_width(72.0)).changed() {
+                let changed = ui
+                    .name_inputs(tl!("Scale"), |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut scale).align(egui::Align2::LEFT_CENTER).desired_width(72.0))
+                    })
+                    .changed();
+                if changed {
                     f.insert("scale".into(), json!(scale));
                 }
-                egui::ComboBox::from_id_salt("dimension-scales").selected_text(tl!("Presets")).width(76.0).show_ui(ui, |ui| {
-                    for scale in ["1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100", "1:200", "2:1", "5:1", "10:1"] {
-                        if ui.selectable_label(false, scale).clicked() {
-                            f.insert("scale".into(), json!(scale));
+                ui.name_inputs(tl!("Scale Presets"), |ui| {
+                    craft_ui::ComboBox::from_id_salt("dimension-scales").selected_text(tl!("Presets")).width(76.0).show_ui(ui, |ui| {
+                        for scale in ["1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100", "1:200", "2:1", "5:1", "10:1"] {
+                            if ui.selectable_label(false, scale).clicked() {
+                                f.insert("scale".into(), json!(scale));
+                            }
                         }
-                    }
+                    });
                 });
             });
             check(ui, f, "hideUnits", "Hide Units");
@@ -223,11 +232,15 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     Ok(r)
 }
 
-/// The Dimension tool's strip: the kind of dimension, and Tool Options.
-pub fn controls(app: &mut VectorzApp, ui: &mut Ui) {
+/// The Dimension tool's strip: the kind of dimension, and Tool Options. In the Control bar
+/// (`reserve` given), each button shows only while the row has room for it and `reserve` after it,
+/// and the buttons after one left out are left out too; the floating strip (`None`) shows them all.
+pub fn controls(app: &mut VectorzApp, ui: &mut Ui, reserve: Option<f32>) {
+    let mut fit = reserve.map(crate::chrome::Fit::new);
+    let mut room = |ui: &Ui, text: &str| fit.as_mut().is_none_or(|f| f.room(ui, &[button_width(ui, text)]));
     let mode = app.session.tool_options()["mode"].as_str().unwrap_or("linear").to_owned();
     for (id, label) in [("linear", "Linear"), ("angular", "Angular"), ("radial", "Radial")] {
-        if ui.selectable_label(mode == id, tl!(label)).clicked() {
+        if room(ui, tl!(label)) && ui.selectable_label(mode == id, tl!(label)).clicked() {
             // Switching away cancels previews and unfinished picks.
             if let Err(e) = app
                 .run("tool.select", json!({"tool":"selection"}))
@@ -238,11 +251,18 @@ pub fn controls(app: &mut VectorzApp, ui: &mut Ui) {
             }
         }
     }
-    if ui.button(tl!("Tool Options…")).clicked()
+    if room(ui, tl!("Tool Options…"))
+        && ui.button(tl!("Tool Options…")).clicked()
         && let Err(e) = open(app)
     {
         app.ui.status = e;
     }
+}
+
+/// The width `ui.button` and `ui.selectable_label` give `text`: the text and the button padding on
+/// both sides.
+fn button_width(ui: &Ui, text: &str) -> f32 {
+    widgets::text_width(ui, RichText::new(text).text_style(egui::TextStyle::Button)) + 2.0 * ui.spacing().button_padding.x
 }
 
 /// Always available while measuring, including workspaces with the main Control bar hidden.
@@ -251,12 +271,12 @@ pub fn floating(app: &mut VectorzApp, ctx: &egui::Context) {
         return;
     }
     egui::Window::new(tl!("Dimension Tool"))
-        .id(egui::Id::new("dimension-strip"))
+        .id(egui::Id::unique("dimension-strip"))
         .default_pos(egui::pos2(90.0, 120.0))
         .resizable(false)
         .collapsible(false)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| controls(app, ui));
+            ui.horizontal(|ui| controls(app, ui, None));
             let mode = app.session.tool_options()["mode"].as_str().unwrap_or("linear").to_owned();
             let hint = match mode.as_str() {
                 "angular" => "Drag out from a corner, or click two straight lines, then click to place.",

@@ -28,9 +28,15 @@ pub(super) fn preview(bytes: &[u8], ps: &[u8], frame: Rect) -> Option<Preview> {
     epsi(ps).and_then(|img| image_doc(img, frame)).map(|document| Preview { document, what: IMAGE })
 }
 
+/// Most pixels a TIFF preview may have: its RGBA copy is four bytes each besides the decoded image.
+const MAX_PREVIEW_PIXELS: u64 = 1 << 26;
+
 fn tiff_rgba(tiff: &[u8]) -> Option<image::RgbaImage> {
-    match image::load_from_memory_with_format(tiff, image::ImageFormat::Tiff) {
-        Ok(img) => Some(img.to_rgba8()),
+    let mut opts = craft_image_codecs::DecodeOptions::default();
+    opts.limits.max_pixels = MAX_PREVIEW_PIXELS;
+    match craft_image_codecs::decode_as_with(craft_image_codecs::Format::Tiff, tiff, &opts) {
+        Ok(img) => image::RgbaImage::from_raw(img.width(), img.height(), img.to_rgba8()),
+        Err(craft_image_codecs::CodecError::LimitExceeded(_)) => None,
         Err(_) => crate::tiff::palette_rgba(tiff),
     }
 }
@@ -41,15 +47,18 @@ fn image_doc(img: image::RgbaImage, frame: Rect) -> Option<Document> {
     if w == 0 || h == 0 {
         return None;
     }
-    let mut png = vec![];
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    let raw = craft_image_codecs::Image::from_raw(w, h, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8, img.into_raw())
+        .ok()?;
+    let png = craft_image_codecs::encode(&raw, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).ok()?;
     let mut doc = Document::new(frame.width(), frame.height());
     let blob = ImageBlob::new("image/png", png);
     let key = blob.content_key();
     doc.images.insert(key.clone(), blob);
     let xf = Affine::scale_non_uniform(frame.width() / f64::from(w), frame.height() / f64::from(h));
-    let mut n =
-        Node::new(doc.alloc_id(), NodeKind::Image(Box::new(ImageObject { key, width: w, height: h, xf, link: None, placement: Default::default() })));
+    let mut n = Node::new(
+        doc.alloc_id(),
+        NodeKind::Image(Box::new(ImageObject { key, width: w, height: h, xf, link: None, placement: Default::default(), pixels: None })),
+    );
     n.name = Some("Preview".into());
     let layer = doc.layers.first().map(|l| l.id)?;
     doc.insert(Some(layer), 0, n).ok()?;
@@ -97,7 +106,16 @@ fn epsi(ps: &[u8]) -> Option<image::RgbaImage> {
         }
         hex.extend(l.strip_prefix('%')?.bytes().filter(u8::is_ascii_hexdigit));
     }
+    hex.truncate(row * h * 2);
+    // A trailing half byte would decode padded with zero: the preview is cut short, so none.
+    if hex.len() % 2 != 0 {
+        return None;
+    }
     let bytes = super::lex::hex_decode(&hex)?;
+    // A preview with its samples missing is none, not a blank image of the size it claims.
+    if bytes.len() < row * h {
+        return None;
+    }
     let max = (1u32 << depth) - 1;
     let mut img = image::RgbaImage::new(w as u32, h as u32);
     for (x, y, px) in img.enumerate_pixels_mut() {

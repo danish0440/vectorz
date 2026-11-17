@@ -9,9 +9,14 @@
 //! `ui.dialog.set`, or `preset` to load a preset), plus the dialog's own: `__view` (`original`,
 //! `optimized`, `2up`, `4up`), `__zoom` (`fit` or a percentage), `__kbps` (connection speed),
 //! `__color` (the colour table's selected colour, by source), `__presetName` (shown while saving a
-//! preset) and `__hasSlices`. Save… remembers
+//! preset) and `__hasSlices`. Optimize to File Size… (`__optimizeOpen: true`) shows `__optimizeK` (the desired size in K),
+//! `__optimizeStart` (`current`, `auto`) and with slices `__optimizeUse` (`allSlices`,
+//! `eachSlice`, `currentSlice`); `__optimizeGo: true` runs `webExport.optimizeToFileSize` and
+//! takes the settings it finds, and `__optimized` holds its result. Save… remembers
 //! the settings and writes the files (`file.saveForWeb`); Done only remembers them; Preview in
-//! Browser opens the HTML page (`file.saveForWeb.browser`). The previews are what Save writes:
+//! Browser opens the HTML page (`file.saveForWeb.browser`). While Alt (Option on macOS) is held,
+//! Cancel reads Reset, which puts the remembered settings back and leaves the dialog open
+//! (`ui.dialogReset`). The previews are what Save writes:
 //! [`webexport::preview_image`], decoded back, cached until the art or a setting changes.
 
 use std::sync::Arc;
@@ -39,7 +44,9 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
     ok: Some("Save…"),
     ok_label: Some(|app| if io::is_web(app) { "Download" } else { "Save…" }),
     discard: Some("Done"),
+    reset: Some(reset),
     min_width: PREVIEW_W + GAP + SIDE_W,
+    inputs: |_| &["path", "preset"],
     ..DialogSpec::FORM
 };
 
@@ -67,16 +74,16 @@ const MATTES: [&str; 3] = ["none", "white", "black"];
 const MATTE_LABELS: [&str; 4] = ["None", "White", "Black", "Other"];
 /// JPEG quality steps: (label, quality).
 const QUALITIES: [(&str, u8); 5] = [("Low", 10), ("Medium", 30), ("High", 60), ("Very High", 80), ("Maximum", 100)];
+/// Optimize to File Size's Start With (`__optimizeStart`) and Use (`__optimizeUse`) choices.
+const START_WITH: [(&str, &str); 2] = [("current", "Current Settings"), ("auto", "Auto Select GIF/JPEG")];
+const SIZE_USE: [(&str, &str); 3] = [("allSlices", "Total of All Slices"), ("eachSlice", "Each Slice"), ("currentSlice", "Current Slice")];
+/// The fields of Optimize to File Size's rows.
+const OPTIMIZE_FIELDS: [&str; 3] = ["__optimizeK", "__optimizeStart", "__optimizeUse"];
 
-/// Open the dialog on the remembered settings.
+/// Open on the document's active artboard, keeping the other remembered settings.
 pub fn open(app: &mut VectorzApp) -> Result<Value, String> {
-    let n = app.session.active().ok_or("no document")?.doc.artboards.len();
-    let mut s = app.session.last_web_settings();
-    // A remembered artboard this document doesn't have: its first.
-    if s.artboard.is_some_and(|a| a >= n) {
-        s.artboard = None;
-    }
-    let mut fields = settings_fields(&s);
+    app.session.active().ok_or("no document")?;
+    let mut fields = settings_fields(&remembered(app));
     let slices = app.session.active().is_some_and(|st| !st.doc.slice_layout().is_empty());
     fields.extend([
         ("__view".into(), json!("2up")),
@@ -86,6 +93,28 @@ pub fn open(app: &mut VectorzApp) -> Result<Value, String> {
     ]);
     app.ui.dialog = Some(Dialog { kind: KIND.into(), fields });
     Ok(Value::Null)
+}
+
+/// The remembered settings (the defaults when none are remembered) on the document's active
+/// artboard; no artboard when the document has none.
+fn remembered(app: &VectorzApp) -> WebSettings {
+    let n = app.session.active().map_or(0, |st| st.doc.artboards.len());
+    let mut s = app.session.last_web_settings();
+    s.artboard = Some(crate::panels::artboards::selected(app, n)).filter(|a| *a < n);
+    s
+}
+
+/// Reset (Cancel with Alt or Option held, or `ui.dialogReset`): the settings go back to the
+/// remembered ones on the document's active artboard ([`remembered`]), and a pending `preset`, a
+/// pending Done (`discard`, which a failed Done leaves), the preset name being typed and the
+/// selected color table entry are dropped. The view, zoom, connection speed and `path` stay,
+/// nothing is remembered or written, and the dialog stays open.
+fn reset(app: &VectorzApp, d: &mut Dialog) -> Result<(), String> {
+    for key in ["preset", "discard", "__presetName", "__color"] {
+        d.fields.remove(key);
+    }
+    d.fields.extend(settings_fields(&remembered(app)));
+    Ok(())
 }
 
 /// The settings as dialog fields.
@@ -131,8 +160,8 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
 }
 
 /// `file.saveForWeb` with settings: write the files (`path`, else a picked file: the page with HTML
-/// output, else the image); the web downloads them. The status bar shows the export's first
-/// warning.
+/// output, else the image); the web downloads them. The status bar shows the export's warnings as
+/// [`io::report_saved`] shows a save's notes.
 pub(crate) fn save(app: &mut VectorzApp, mut p: Value) -> Result<Value, String> {
     // Bad settings never open a save panel.
     let s = app.session.web_settings(&p)?;
@@ -148,7 +177,7 @@ pub(crate) fn save(app: &mut VectorzApp, mut p: Value) -> Result<Value, String> 
         }
         match names.first().and_then(Value::as_str).filter(|_| has_warnings(&r)) {
             Some(first) => io::report_saved(app, first, &r),
-            None => app.status(format!("Downloaded {} file(s)", names.len())),
+            None => app.status(crate::i18n::msg_n(names.len() as u64, "Downloaded {n} file", "Downloaded {n} files", &[])),
         }
         return Ok(json!({ "files": names, "bytes": r["bytes"], "warnings": r["warnings"] }));
     }
@@ -168,21 +197,29 @@ pub(crate) fn save(app: &mut VectorzApp, mut p: Value) -> Result<Value, String> 
 }
 
 /// Whether an export's reply `r` has warnings (an image that couldn't be decoded):
-/// [`io::report_saved`] puts the first in the status bar as a save's note.
+/// [`io::report_saved`] shows them in the status bar as a save's notes.
 fn has_warnings(r: &Value) -> bool {
     r["warnings"].as_array().is_some_and(|w| !w.is_empty())
 }
 
+/// The preview page's name from the document's title `stem`: one file name in the preview folder.
+/// `file_stem` gives back a title it can't take a stem of ("../.."), so one with a separator or of
+/// dots only is "Untitled".
+pub(super) fn preview_name(stem: &str) -> &str {
+    if stem.trim().is_empty() || stem.contains(['/', '\\']) || stem.chars().all(|c| c == '.') { "Untitled" } else { stem }
+}
+
 /// `file.saveForWeb.browser`: the HTML page and its images in a new temporary folder, opened in the
-/// default browser (desktop). When the export has warnings, the status bar shows the first in
-/// place of "Opened …".
+/// default browser (desktop). When the export has warnings, the status bar shows them as
+/// [`io::report_saved`] shows a save's notes.
 pub(crate) fn browser_preview(app: &mut VectorzApp, p: &Value) -> Result<Value, String> {
     if io::is_web(app) {
         return Err("Preview in Browser needs the desktop app (the web downloads files instead)".into());
     }
+    app.refuse_automation("file.saveForWeb.browser")?;
     let stem = app.session.active().map(|st| vectorz_engine::cmd::fileio::file_stem(&st.doc.title)).ok_or("no document")?;
     let dir = temp_folder()?;
-    let path = format!("{dir}/{}.html", if stem.trim().is_empty() { "Untitled" } else { stem.as_str() });
+    let path = format!("{dir}/{}.html", preview_name(&stem));
     let mut q = if p.is_object() { p.clone() } else { json!({}) };
     if let Some(o) = q.as_object_mut() {
         o.insert("path".into(), json!(path));
@@ -200,35 +237,147 @@ pub(crate) fn browser_preview(app: &mut VectorzApp, p: &Value) -> Result<Value, 
 #[cfg(not(target_arch = "wasm32"))]
 const PREVIEW_KEEP: std::time::Duration = std::time::Duration::from_secs(3600);
 
-/// The folder a browser preview goes to: a new one for each preview, in the temporary folder's
-/// `VectorZ Save for Web`.
+/// The folder a browser preview goes to: a new one for each preview, in the system's temporary
+/// folder ([`preview_folder_in`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn temp_folder() -> Result<String, String> {
-    preview_folder(&std::env::temp_dir().join("VectorZ Save for Web"), PREVIEW_KEEP)
+    preview_folder_in(&std::env::temp_dir(), PREVIEW_KEEP)
 }
 
-/// A new folder in `root`, named after the process id and a count of the process's previews. A
-/// name that is already taken, by an earlier process with the same id, is skipped for the next
-/// count. Entries of `root` last changed `keep` or longer ago are removed first.
+/// The name of a folder that a preview made in the temporary folder, beside a `VectorZ Save
+/// for Web` it couldn't use, before the process id and the count.
+#[cfg(not(target_arch = "wasm32"))]
+const BESIDE: &str = "VectorZ Save for Web ";
+
+/// A new folder for a browser preview in the temporary folder `tmp`: inside `VectorZ Save for
+/// Web` ([`preview_folder`]), or, when that folder can't be used, directly in `tmp`, named
+/// [`BESIDE`] followed by the process id and a count. The log says why the shared folder wasn't
+/// used. Each preview first removes the folders of that name in `tmp` last changed `keep` or longer
+/// ago ([`remove_old`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn preview_folder_in(tmp: &std::path::Path, keep: std::time::Duration) -> Result<String, String> {
+    remove_old(tmp, BESIDE, keep);
+    preview_folder(&tmp.join("VectorZ Save for Web"), keep).or_else(|e| {
+        log::warn!("vectorz: Preview in Browser can't use {e}, so the preview goes to a new folder of its own");
+        new_folder(tmp, BESIDE)
+    })
+}
+
+/// A new folder in `root` ([`new_folder`]). `root` is made when it is missing. An existing `root`
+/// is refused when it is a link or not a folder, or, on unix, when it belongs to another user or
+/// users other than its owner can write to it. Before the new folder is made, the preview folders
+/// in `root` last changed `keep` or longer ago are removed ([`remove_old`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn preview_folder(root: &std::path::Path, keep: std::time::Duration) -> Result<String, String> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age >= keep);
-        if old {
+    match private_folder().recursive(true).create(root) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("{}: {e}", root.display())),
+    }
+    let m = std::fs::symlink_metadata(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    if let Some(why) = refused(&m) {
+        return Err(format!("{}: {}", root.display(), why));
+    }
+    remove_old(root, "", keep);
+    new_folder(root, "")
+}
+
+/// Removes the preview folders in `dir` last changed `keep` or longer ago: folders (not links)
+/// named `prefix` followed by `<digits>-<digits>`, on unix only those the current user owns. Other
+/// entries are left alone.
+#[cfg(not(target_arch = "wasm32"))]
+fn remove_old(dir: &std::path::Path, prefix: &str, keep: std::time::Duration) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if !is_preview_name(&e.file_name(), prefix) {
+            continue;
+        }
+        // `DirEntry::metadata` doesn't follow a link, so a link is never a folder here.
+        let Ok(m) = e.metadata() else { continue };
+        let old = m.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age >= keep);
+        if old && m.is_dir() && mine(&m) {
             // Best effort: one that can't be removed now is tried again by the next preview.
-            let _ = if e.file_type().is_ok_and(|t| t.is_dir()) { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
+            let _ = std::fs::remove_dir_all(e.path());
         }
     }
-    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+}
+
+/// A new folder in `parent` named `prefix` followed by the process id, `-` and a count of the
+/// process's previews; on unix only its owner can open it. A name that is already taken, by an
+/// earlier process with the same id or by anyone else, is skipped for the next count.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_folder(parent: &std::path::Path, prefix: &str) -> Result<String, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     loop {
-        let dir = root.join(format!("{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-        match std::fs::create_dir(&dir) {
+        let dir = parent.join(format!("{prefix}{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        match private_folder().create(&dir) {
             Ok(()) => return Ok(dir.to_string_lossy().replace('\\', "/")),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(format!("{}: {e}", dir.display())),
         }
     }
+}
+
+/// A builder for folders that only their owner can read, write or open (mode 0o700).
+#[cfg(unix)]
+fn private_folder() -> std::fs::DirBuilder {
+    let mut b = std::fs::DirBuilder::new();
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b
+}
+
+/// A builder for folders: a plain one outside unix.
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn private_folder() -> std::fs::DirBuilder {
+    std::fs::DirBuilder::new()
+}
+
+/// Why a preview root whose metadata (of the root itself, not what a link points to) is `m` can't
+/// be used, or `None` when it can.
+#[cfg(not(target_arch = "wasm32"))]
+fn refused(m: &std::fs::Metadata) -> Option<&'static str> {
+    if m.file_type().is_symlink() {
+        Some("it is a link")
+    } else if !m.is_dir() {
+        Some("it is not a folder")
+    } else if !mine(m) {
+        Some("it belongs to another user")
+    } else if others_can_write(m) {
+        Some("other users can write to it")
+    } else {
+        None
+    }
+}
+
+/// Whether the current user owns the file with metadata `m`.
+#[cfg(unix)]
+fn mine(m: &std::fs::Metadata) -> bool {
+    std::os::unix::fs::MetadataExt::uid(m) == rustix::process::geteuid().as_raw()
+}
+
+/// Whether the current user owns the file with metadata `m`: always true outside unix.
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn mine(_: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// Whether users other than the owner of the file with metadata `m` can write to it.
+#[cfg(unix)]
+fn others_can_write(m: &std::fs::Metadata) -> bool {
+    std::os::unix::fs::MetadataExt::mode(m) & 0o022 != 0
+}
+
+/// Whether users other than the owner of the file with metadata `m` can write to it: always false
+/// outside unix.
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn others_can_write(_: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Whether `name` is a preview folder's name: `prefix`, then digits, `-` and digits.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_preview_name(name: &std::ffi::OsStr, prefix: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    name.to_str().and_then(|n| n.strip_prefix(prefix)).and_then(|n| n.split_once('-')).is_some_and(|(a, b)| digits(a) && digits(b))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -259,8 +408,9 @@ struct Cache {
     shots: Vec<(String, Result<Shot, String>)>,
 }
 
+/// Temp-memory key for the Save for Web preview render, original image and optimised shot textures.
 fn cache_id() -> egui::Id {
-    egui::Id::new("save-for-web-previews")
+    egui::Id::unique("save-for-web-previews")
 }
 
 /// The texture of straight RGBA pixels.
@@ -270,13 +420,11 @@ fn texture(ctx: &egui::Context, name: &str, px: &[u8], [w, h]: [u32; 2]) -> egui
     ctx.load_texture(name, img, opts)
 }
 
-/// The rendering for `s` and the optimised image for each of `panes`, from the cache when nothing
-/// they depend on changed.
-fn previews(app: &VectorzApp, ctx: &egui::Context, s: &WebSettings, panes: &[WebSettings]) -> (Result<Shot, String>, Vec<Result<Shot, String>>) {
-    let Some(st) = app.session.active() else { return (Err("no document".into()), vec![]) };
-    let doc = &st.doc;
-    let mut cache: Cache = ctx.data(|m| m.get_temp(cache_id())).unwrap_or_default();
-    let render_key = format!(
+/// What the rendering for `s` depends on: the active document, its revision and the settings that
+/// change the image's pixels.
+fn render_key(app: &VectorzApp, s: &WebSettings) -> Option<String> {
+    let st = app.session.active()?;
+    Some(format!(
         "{}:{}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}",
         st.uid,
         st.revision,
@@ -287,7 +435,15 @@ fn previews(app: &VectorzApp, ctx: &egui::Context, s: &WebSettings, panes: &[Web
         s.clip_to_artboard,
         s.artboard,
         (!s.clip_to_artboard).then_some(s.slices)
-    );
+    ))
+}
+
+/// The rendering for `s` and the optimised image for each of `panes`, from the cache when nothing
+/// they depend on changed.
+fn previews(app: &VectorzApp, ctx: &egui::Context, s: &WebSettings, panes: &[WebSettings]) -> (Result<Shot, String>, Vec<Result<Shot, String>>) {
+    let (Some(st), Some(render_key)) = (app.session.active(), render_key(app, s)) else { return (Err("no document".into()), vec![]) };
+    let doc = &st.doc;
+    let mut cache: Cache = ctx.data(|m| m.get_temp(cache_id())).unwrap_or_default();
     if cache.render_key != render_key || cache.render.is_none() {
         let r = webexport::render(doc, s).map(Arc::new);
         cache.original = r.as_ref().ok().map(|r| Shot {
@@ -366,6 +522,14 @@ fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     if let Err(e) = apply_preset(app, d) {
         app.status(e);
     }
+    if d.fields.remove("__optimizeOpen").is_some_and(|v| v == json!(true)) {
+        open_optimize_rows(app, ui, d);
+    }
+    if d.fields.remove("__optimizeGo").is_some_and(|v| v == json!(true))
+        && let Err(e) = optimize_to_size(app, d)
+    {
+        app.status(e);
+    }
     let settings = settings_of(app, d);
     let mut browser = false;
     ui.horizontal_top(|ui| {
@@ -379,6 +543,7 @@ fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
             side(app, ui, d, settings.as_ref().ok());
         });
     });
+    optimize_on_enter(ui.ctx(), d);
     if browser && let Err(e) = app.run("file.saveForWeb.browser", params(d)) {
         app.status(e);
     }
@@ -395,7 +560,7 @@ fn preview_area(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, setting
     }
     ui.add_space(4.0);
     let (area, resp) = ui.allocate_exact_size(egui::vec2(PREVIEW_W, PREVIEW_H), egui::Sense::click_and_drag());
-    let pan_id = egui::Id::new("save-for-web-pan");
+    let pan_id = egui::Id::unique("save-for-web-pan");
     let mut pan: egui::Vec2 = ui.ctx().data(|m| m.get_temp(pan_id)).unwrap_or_default();
     if resp.dragged() {
         pan += resp.drag_delta();
@@ -413,7 +578,7 @@ fn preview_area(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, setting
             let (original, shots) = previews(app, ui.ctx(), s, &panes);
             let zoom = d.str("__zoom").parse::<f32>().ok().filter(|z| z.is_finite() && *z > 0.0).map(|z| z / 100.0);
             let kbps = d.f64("__kbps", 56.6);
-            let Some(checker) = app.session.active().map(|st| crate::canvas::checker_texture(ui.ctx(), &st.doc.setup)) else { return false };
+            let Some(checker) = app.session.active().map(|st| crate::canvas::checker_texture(ui.ctx(), &st.doc.setup, None)) else { return false };
             let cells: Vec<(egui::Rect, Pane)> = match view {
                 0 => vec![(area, Pane::Original)],
                 1 => vec![(area, Pane::Optimized(0))],
@@ -441,14 +606,16 @@ fn preview_area(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, setting
     let mut browser = false;
     ui.horizontal(|ui| {
         let z = ZOOMS.iter().position(|z| *z == d.str("__zoom")).unwrap_or(2);
-        if let Some(i) = widgets::dropdown(ui, "sfw-zoom", ZOOM_LABELS[z], &ZOOM_LABELS, 110.0) {
+        let zoom = ui.name_inputs(tl!("Zoom"), |ui| widgets::dropdown(ui, "sfw-zoom", ZOOM_LABELS[z], &ZOOM_LABELS, 110.0));
+        if let Some(i) = zoom {
             d.fields.insert("__zoom".into(), json!(ZOOMS[i]));
             ui.ctx().data_mut(|m| m.insert_temp(pan_id, egui::Vec2::ZERO));
         }
         let kbps = d.f64("__kbps", 56.6);
         let labels: Vec<String> = SPEEDS.iter().map(|s| speed_label(*s)).collect();
         let names: Vec<&str> = labels.iter().map(String::as_str).collect();
-        if let Some(i) = widgets::dropdown(ui, "sfw-speed", &speed_label(kbps), &names, 110.0)
+        let speed = ui.name_inputs(tl!("Download:"), |ui| widgets::dropdown(ui, "sfw-speed", &speed_label(kbps), &names, 110.0));
+        if let Some(i) = speed
             && let Some(s) = SPEEDS.get(i)
         {
             d.fields.insert("__kbps".into(), json!(s));
@@ -560,6 +727,7 @@ fn pairs<T: Copy>(all: &[T], key: fn(T) -> &'static str, label: fn(T) -> &'stati
 
 fn side(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, s: Option<&WebSettings>) {
     presets_row(app, ui, d, s);
+    optimize_rows(ui, d, s, &art_key(app));
     widgets::divider(ui);
     egui::ScrollArea::vertical().id_salt("sfw-settings").max_height(PREVIEW_H - 40.0).auto_shrink([false, true]).show(ui, |ui| {
         let choice = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str, options: &[(&str, &str)]| {
@@ -659,6 +827,157 @@ fn presets_row(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, s: Optio
             Err(e) => app.status(e),
         }
     }
+}
+
+/// The optimized file size of the settings `s` on the active document as it is now: from the preview
+/// cache when the cache holds that document at its current revision, else made through [`previews`],
+/// which keeps the image for the preview drawn later in the same frame.
+fn previewed_bytes(app: &VectorzApp, ui: &egui::Ui, s: &WebSettings) -> Option<usize> {
+    let key = s.to_json().to_string();
+    let cache: Option<Cache> = ui.ctx().data(|m| m.get_temp(cache_id()));
+    let cached = cache
+        .filter(|c| Some(&c.render_key) == render_key(app, s).as_ref())
+        .and_then(|c| c.shots.into_iter().find(|(k, _)| *k == key))
+        .and_then(|(_, shot)| shot.ok())
+        .and_then(|shot| shot.bytes);
+    cached.or_else(|| previews(app, ui.ctx(), s, std::slice::from_ref(s)).1.into_iter().next()?.ok()?.bytes)
+}
+
+/// Optimize to File Size…: the button opens rows ([`open_optimize_rows`]) for the desired size in
+/// K, Start With and, with slices, Use; OK or Enter runs [`optimize_to_size`] and Cancel
+/// closes the rows. A line gives the size it found and whether that is within the desired size
+/// ([`optimized_result`]).
+fn optimize_rows(ui: &mut egui::Ui, d: &mut Dialog, s: Option<&WebSettings>, art: &str) {
+    if d.fields.contains_key("__optimizeK") {
+        widgets::label_row(ui, tl!("Desired File Size:"), LABEL_W, |ui| {
+            let k = d.f64("__optimizeK", 32.0);
+            if let Some(v) = widgets::range_field(ui, "sfw-optimize-k", k, 0.001..=webexport::MAX_DESIRED_K, "K", 3, 100.0) {
+                d.fields.insert("__optimizeK".into(), json!(v));
+            }
+        });
+        form::choice(ui, d, "__optimizeStart", tl!("Start With:"), (LABEL_W, FIELD_W), &START_WITH);
+        if d.bool("__hasSlices") {
+            form::choice(ui, d, "__optimizeUse", tl!("Use:"), (LABEL_W, FIELD_W), &SIZE_USE);
+        }
+        widgets::label_row(ui, "", LABEL_W, |ui| {
+            if widgets::flat_button(ui, tl!("OK"), 64.0).clicked() {
+                d.fields.insert("__optimizeGo".into(), json!(true));
+            }
+            if widgets::flat_button(ui, tl!("Cancel"), 64.0).clicked() {
+                for k in OPTIMIZE_FIELDS {
+                    d.fields.remove(k);
+                }
+            }
+        });
+    } else {
+        widgets::label_row(ui, "", LABEL_W, |ui| {
+            if widgets::flat_button(ui, tl!("Optimize to File Size…"), FIELD_W).clicked() {
+                d.fields.insert("__optimizeOpen".into(), json!(true));
+            }
+        });
+    }
+    if let Some(r) = optimized_result(d, s, art) {
+        let size = size_label(r["bytes"].as_u64().unwrap_or(0) as usize);
+        let target = size_label(r["targetBytes"].as_u64().unwrap_or(0) as usize);
+        let text = if r["achieved"] == json!(true) {
+            crate::i18n::fmt(tl!("{size}, within {target}"), &[("size", &size), ("target", &target)])
+        } else {
+            crate::i18n::fmt(tl!("No setting tried fits in {target}; the smallest is {size}"), &[("size", &size), ("target", &target)])
+        };
+        widgets::label_row(ui, "", LABEL_W, |ui| {
+            widgets::dim_label(ui, &text);
+        });
+    }
+}
+
+/// An Enter while the Optimize to File Size rows ([`optimize_rows`]) are open is their OK: it does
+/// not save. Run after every control of the dialog has drawn, it runs the search unless a control
+/// took the press (an open dropdown), a field refused the value typed in it, or Ctrl, Cmd or Alt was
+/// held, which the size field does not commit.
+pub(super) fn optimize_on_enter(ctx: &egui::Context, d: &mut Dialog) {
+    if !d.fields.contains_key("__optimizeK") || !crate::shortcuts::pressed_anew(ctx, egui::Key::Enter) {
+        return;
+    }
+    let held = ctx.input(|i| {
+        i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command || modifiers.alt))
+    });
+    let refused = ctx.data(|m| m.get_temp::<bool>(widgets::dialog_reject_commit_flag())).unwrap_or(false);
+    widgets::reject_dialog_commit(ctx);
+    if !held && !refused {
+        d.fields.insert("__optimizeGo".into(), json!(true));
+        ctx.request_repaint();
+    }
+}
+
+/// The last Optimize to File Size result (`__optimized`) while it still holds: the settings are the
+/// ones it found and the art (`art`, from [`art_key`]) is the art it measured.
+pub(super) fn optimized_result<'a>(d: &'a Dialog, s: Option<&WebSettings>, art: &str) -> Option<&'a Value> {
+    d.fields.get("__optimized").filter(|r| r["art"] == json!(art) && s.is_some_and(|s| r["settings"] == s.to_json()))
+}
+
+/// The active document, its revision and its selected objects and slices, which an Optimize to File
+/// Size result was measured on. The selection decides the slices Save writes with `slices: selected`
+/// and the slice Current Slice measures, and a selection made on the canvas or with the Slice
+/// Selection tool leaves the revision as it is.
+pub(super) fn art_key(app: &VectorzApp) -> String {
+    app.session.active().map_or_else(String::new, |st| format!("{}:{}:{:?}:{:?}", st.uid, st.revision, st.selection.objects, st.selection.slices))
+}
+
+/// `bytes` in K, rounded up to the Desired File Size field's 0.001 K so the size it asks for holds
+/// them. The product is taken in `u128`, which holds any `usize` times 1000 on every target.
+pub(super) fn size_k(bytes: usize) -> f64 {
+    (bytes as u128 * 1000).div_ceil(1024).max(1) as f64 / 1000.0
+}
+
+/// Optimize to File Size… (`__optimizeOpen`): opens the rows with Current Settings and Total of All
+/// Slices, the desired size starting at the size the current settings give what that Use measures:
+/// the image slices' files together when there are slices, else the preview's file (32 K when it
+/// cannot be measured).
+fn open_optimize_rows(app: &mut VectorzApp, ui: &egui::Ui, d: &mut Dialog) {
+    let bytes = if d.bool("__hasSlices") {
+        let mut p = params(d);
+        if let Some(o) = p.as_object_mut() {
+            o.insert("desiredK".into(), json!(webexport::MAX_DESIRED_K));
+            o.insert("use".into(), json!("allSlices"));
+        }
+        let r = app.run("webExport.optimizeToFileSize", p).ok();
+        r.filter(|r| r["achieved"] == json!(true)).and_then(|r| r["bytes"].as_u64()).map(|b| b as usize)
+    } else {
+        settings_of(app, d).ok().and_then(|s| previewed_bytes(app, ui, &s))
+    };
+    let k = bytes.map_or(32.0, size_k);
+    d.fields.insert("__optimizeK".into(), json!(k));
+    d.fields.insert("__optimizeStart".into(), json!("current"));
+    d.fields.insert("__optimizeUse".into(), json!("allSlices"));
+}
+
+/// Optimize to File Size's OK: `webExport.optimizeToFileSize` with the dialog's settings and the
+/// rows' values; the settings it finds replace the dialog's, the rows close and `__optimized`
+/// keeps the result. An error leaves the settings and the rows as they are.
+pub(super) fn optimize_to_size(app: &mut VectorzApp, d: &mut Dialog) -> Result<Value, String> {
+    let mut p = params(d);
+    if let Some(o) = p.as_object_mut() {
+        o.insert("desiredK".into(), d.fields.get("__optimizeK").cloned().unwrap_or(Value::Null));
+        let start = d.str("__optimizeStart");
+        if !start.is_empty() {
+            o.insert("startWith".into(), json!(start));
+        }
+        let scope = d.str("__optimizeUse");
+        if d.bool("__hasSlices") && !scope.is_empty() {
+            o.insert("use".into(), json!(scope));
+        }
+    }
+    let r = app.run("webExport.optimizeToFileSize", p)?;
+    if let Some(found) = r["settings"].as_object() {
+        d.fields.extend(found.clone());
+    }
+    for k in OPTIMIZE_FIELDS {
+        d.fields.remove(k);
+    }
+    let result =
+        json!({ "settings": r["settings"], "bytes": r["bytes"], "targetBytes": r["targetBytes"], "achieved": r["achieved"], "art": art_key(app) });
+    d.fields.insert("__optimized".into(), result);
+    Ok(r)
 }
 
 /// Two checkboxes side by side.
@@ -855,12 +1174,12 @@ fn image_size(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, s: Option<&We
         d.fields.insert(key.into(), v);
     };
     widgets::label_row(ui, tl!("W:"), LABEL_W, |ui| {
-        if let Some(v) = widgets::plain_field(ui, "sfw-w", f64::from(w), " px", 0, 80.0) {
-            set(d, "width", json!(v.round().max(1.0)));
+        if let Some(v) = widgets::range_field(ui, "sfw-w", f64::from(w), 1.0..=f64::INFINITY, " px", 0, 80.0) {
+            set(d, "width", json!(v));
         }
         widgets::field_label(ui, tl!("H:"));
-        if let Some(v) = widgets::plain_field(ui, "sfw-h", f64::from(h), " px", 0, 80.0) {
-            set(d, "height", json!(v.round().max(1.0)));
+        if let Some(v) = widgets::range_field(ui, "sfw-h", f64::from(h), 1.0..=f64::INFINITY, " px", 0, 80.0) {
+            set(d, "height", json!(v));
         }
     });
     let percent = region.map_or(100.0, |(_, scale)| (scale * 100.0 * 100.0).round() / 100.0);
