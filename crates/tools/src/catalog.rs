@@ -24,7 +24,11 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
         t("groupSelection", "Group Selection Tool", None, "tool-group-select"),
     ],
     &[t("magicWand", "Magic Wand Tool", Some("Y"), "tool-magic-wand")],
-    &[t("lasso", "Lasso Tool", Some("Q"), "tool-lasso")],
+    &[
+        t("lasso", "Lasso Tool", Some("Q"), "tool-lasso"),
+        // Enclosing Lasso's tool, kept out of `addons::GROUPS` so that `all_tools` lists it once.
+        t(crate::addons::enclosing_lasso::ID, "Enclosing Lasso Tool", None, "tool-lasso"),
+    ],
     &[
         t("pen", "Pen Tool", Some("P"), "tool-pen"),
         t("addAnchor", "Add Anchor Point Tool", Some("+"), "tool-pen-add"),
@@ -37,8 +41,8 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
         t("areaType", "Area Type Tool", None, "tool-type-area"),
         t("typeOnPath", "Type on a Path Tool", None, "tool-type-path"),
         t("verticalType", "Vertical Type Tool", None, "tool-type-vertical"),
-        t("verticalAreaType", "Vertical Area Type Tool", None, "tool-type-vertical"),
-        t("verticalTypeOnPath", "Vertical Type on a Path Tool", None, "tool-type-path"),
+        t("verticalAreaType", "Vertical Area Type Tool", None, "tool-type-vertical-area"),
+        t("verticalTypeOnPath", "Vertical Type on a Path Tool", None, "tool-type-vertical-path"),
         t("touchType", "Touch Type Tool", Some("Shift+T"), "tool-touch-type"),
     ],
     &[
@@ -52,6 +56,7 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
         t("rectangle", "Rectangle Tool", Some("M"), "tool-rect"),
         t("roundedRectangle", "Rounded Rectangle Tool", None, "tool-rounded-rect"),
         t("ellipse", "Ellipse Tool", Some("L"), "tool-ellipse"),
+        t(crate::circle::ID, "Circle Tool", None, "tool-circle"),
         t("polygon", "Polygon Tool", None, "tool-polygon"),
         t("star", "Star Tool", None, "tool-star"),
         t("flare", "Flare Tool", None, "tool-flare"),
@@ -68,6 +73,9 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
         t("eraser", "Eraser Tool", Some("Shift+E"), "tool-eraser"),
         t("scissors", "Scissors Tool", Some("C"), "tool-scissors"),
         t("knife", "Knife", None, "tool-knife"),
+        // Path Precision Tools' Trim at Crossings Tool, kept out of `addons::PATH_TOOLS` so that
+        // `all_tools` lists it once.
+        t(crate::addons::trim::ID, "Trim at Crossings Tool", None, "dc-pf-trim"),
         t("mirrorCut", "Mirror & Cut Tool", None, "tool-mirror-cut"),
         t("lineCut", "Line Cut Tool", None, "tool-line-cut"),
         t("rectCut", "Rectangle Cut Tool", None, "tool-rect-cut"),
@@ -101,7 +109,7 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
     &[t("mesh", "Mesh Tool", Some("U"), "tool-mesh")],
     &[t("gradient", "Gradient Tool", Some("G"), "tool-gradient")],
     &[t("eyedropper", "Eyedropper Tool", Some("I"), "tool-eyedropper"), t("measure", "Measure Tool", None, "tool-measure")],
-    &[t("blend", "Blend Tool", Some("W"), "tool-blend")],
+    &[t("blend", "Blend Tool", Some("W"), "tool-blend"), t("objectsOnPath", "Objects on Path Tool", None, "tool-objects-on-path")],
     &[t("dimension", "Dimension Tool", None, "tool-dimension")],
     &[
         t("symbolSprayer", "Symbol Sprayer Tool", Some("Shift+S"), "tool-symbol"),
@@ -137,8 +145,9 @@ pub const TOOL_GROUPS: &[&[ToolInfo]] = &[
     &[t("zoom", "Zoom Tool", Some("Z"), "tool-zoom")],
 ];
 
+/// Every tool: the toolbar's, then the add-ons' ([`crate::addons::GROUPS`]).
 pub fn all_tools() -> impl Iterator<Item = &'static ToolInfo> {
-    TOOL_GROUPS.iter().flat_map(|g| g.iter())
+    TOOL_GROUPS.iter().chain(crate::addons::GROUPS).flat_map(|g| g.iter())
 }
 
 pub fn tool_info(id: &str) -> Option<&'static ToolInfo> {
@@ -163,7 +172,7 @@ pub fn is_selection_tool(id: &str) -> bool {
 /// The tools that show a selected path's anchors and handles as Direct Selection does, and drag
 /// them: a Cmd drag with one of them is a Direct Selection drag until a selection tool is chosen.
 pub fn edits_anchors(id: &str) -> bool {
-    matches!(id, "directSelection" | "pen" | "addAnchor" | "deleteAnchor" | "anchorPoint" | "curvature")
+    matches!(id, "directSelection" | "pen" | "addAnchor" | "deleteAnchor" | "anchorPoint" | "curvature" | crate::addons::smart_pen::ID)
 }
 
 #[cfg(test)]

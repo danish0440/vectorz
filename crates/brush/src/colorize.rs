@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use vectorz_color::{Color, Paint};
-use vectorz_doc::{AppearanceItem, Node};
+use vectorz_doc::{AppearanceItem, Node, NodeKind};
 
 use crate::Colorization;
 
@@ -13,15 +13,26 @@ fn luminance(c: &Color) -> f32 {
 }
 
 fn map_color(c: &Color, mode: Colorization, key: &Color) -> Color {
-    let lum = luminance(c);
+    // Black ink alone is its own tint: its amount is the tint, not how light it displays (100% K
+    // displays lighter than black).
+    let light = match *c {
+        Color::Cmyk { c, m, y, k } if c == 0.0 && m == 0.0 && y == 0.0 => 1.0 - k,
+        _ => luminance(c),
+    };
+    // A process or gray stroke color's tints and shades stay in its model.
+    let (white, black) = match key {
+        Color::Cmyk { .. } => (Color::cmyk(0.0, 0.0, 0.0, 0.0), Color::cmyk(0.0, 0.0, 0.0, 1.0)),
+        Color::Gray { .. } => (Color::gray(0.0), Color::gray(1.0)),
+        _ => (Color::WHITE, Color::BLACK),
+    };
     match mode {
         Colorization::None => *c,
-        Colorization::Tints => key.lerp(&Color::WHITE, lum),
+        Colorization::Tints => key.lerp_keep_model(&white, light),
         Colorization::TintsAndShades => {
-            if lum < 0.5 {
-                Color::BLACK.lerp(key, lum * 2.0)
+            if light < 0.5 {
+                key.lerp_keep_model(&black, 1.0 - light * 2.0)
             } else {
-                key.lerp(&Color::WHITE, (lum - 0.5) * 2.0)
+                key.lerp_keep_model(&white, (light - 0.5) * 2.0)
             }
         }
         Colorization::HueShift { key: art_key } => {
@@ -43,7 +54,8 @@ fn map_paint(p: &mut Paint, mode: Colorization, key: &Color) {
 }
 
 /// Recolour `n` (recursively) for a stroke painted `stroke`, and strip brushes from its strokes so
-/// brush output never recurses. Non-solid stroke paints leave the art's colours alone.
+/// brush output never recurses. Non-solid stroke paints leave the art's colours alone. Type is
+/// recolored like paths: its characters' solid fills and strokes as well as its own.
 pub fn colorize(n: &mut Node, mode: Colorization, stroke: &Paint) {
     let key = match (mode, stroke.color()) {
         (Colorization::None, _) | (_, None) => None,
@@ -65,60 +77,121 @@ pub fn colorize(n: &mut Node, mode: Colorization, stroke: &Paint) {
                 }
             }
         }
+        if let (Some(k), NodeKind::Text(t)) = (&key, &mut n.kind) {
+            for r in &mut t.runs {
+                map_paint(&mut r.style.fill, mode, k);
+                map_paint(&mut r.style.stroke, mode, k);
+            }
+        }
         if let Some(ch) = n.children_mut() {
             for c in ch.iter_mut() {
                 walk(Arc::make_mut(c), mode, key);
             }
         }
+        // A mask's art is drawn too: a brush on its strokes would run this brush again. Its colours
+        // are the mask's values, so they stay.
+        if let Some(m) = n.extras_if_any().and_then(|e| e.mask.as_mut()) {
+            strip_brushes(Arc::make_mut(&mut m.art));
+        }
     }
     walk(n, mode, key);
 }
 
-/// Mix every solid paint under `n` towards `color` by `amount` (0..1) — the Symbol Stainer.
-pub fn tint_node(n: &mut Node, color: &Color, amount: f32) {
-    let amount = amount.clamp(0.0, 1.0);
-    for it in &mut n.appearance.items {
-        let p = match it {
-            AppearanceItem::Fill(f) => &mut f.paint,
-            AppearanceItem::Stroke(s) => &mut s.paint,
-        };
-        if let Paint::Solid { color: c, .. } = p {
-            *p = Paint::solid(c.lerp(color, amount));
+/// Mixed into a stroke's seed for its hue jitter, so the amounts come from a sequence of their own
+/// and a copy's size, spacing, scatter and rotation stay as they were without hue jitter.
+const HUE_JITTER_SALT: u64 = 0x6875_655f_6a69_7474;
+
+/// Turn the hue of each of `copies` (a scatter brush's copies, in order along the path) by its
+/// own amount between −`amount` and `amount` degrees, drawn from `seed` (the stroke's
+/// [`crate::track::seed_of`]).
+pub(crate) fn jitter_hues(copies: &mut [Node], amount: f64, seed: u64) {
+    let mut rng = crate::track::Rng::new(seed ^ HUE_JITTER_SALT);
+    for n in copies {
+        let turn = rng.range(-amount, amount) as f32;
+        turn_hues(n, turn);
+    }
+}
+
+/// `c` with its hue turned by `degrees`, worked out on its own components so nothing else about it
+/// changes: RGB in HSB of its values, CMYK over C, M and Y with K kept (as
+/// [`Color::complement_keep_model`] does), Lab by turning a and b. `None` for a color without a hue:
+/// white, black and grays, in their own model (Gray, CMYK with no C, M or Y ink).
+fn turned(c: &Color, degrees: f32) -> Option<Color> {
+    if !degrees.is_finite() || vectorz_color::recolor::Neutral::of(c).is_some() {
+        return None;
+    }
+    let turn = |v: [f32; 3]| {
+        let [h, s, b] = vectorz_color::rgb_to_hsb(v);
+        (s > 0.0).then(|| vectorz_color::hsb_to_rgb([(h + degrees).rem_euclid(360.0), s, b]))
+    };
+    match *c {
+        Color::Rgb { r, g, b } => turn([r, g, b]).map(|[r, g, b]| Color::rgb(r, g, b)),
+        Color::Cmyk { c, m, y, k } => turn([1.0 - c, 1.0 - m, 1.0 - y]).map(|[r, g, b]| Color::cmyk(1.0 - r, 1.0 - g, 1.0 - b, k)),
+        Color::Gray { .. } => None,
+        Color::Lab { l, a, b } => {
+            let (sin, cos) = f64::from(degrees).to_radians().sin_cos();
+            let (a, b) = (f64::from(a), f64::from(b));
+            Some(Color::lab(l, (a * cos - b * sin) as f32, (a * sin + b * cos) as f32))
         }
     }
-    if let vectorz_doc::NodeKind::Text(t) = &mut n.kind {
+}
+
+fn turn_paint(p: &mut Paint, degrees: f32) {
+    if let Paint::Solid { color, .. } = p
+        && let Some(c) = turned(color, degrees)
+    {
+        *p = Paint::solid(c);
+    }
+}
+
+/// Turn the hue of the solid fills and strokes under `n`, its type's characters included. A
+/// mask's colors are its values, so they stay.
+fn turn_hues(n: &mut Node, degrees: f32) {
+    for it in &mut n.appearance.items {
+        match it {
+            AppearanceItem::Fill(f) => turn_paint(&mut f.paint, degrees),
+            AppearanceItem::Stroke(s) => turn_paint(&mut s.paint, degrees),
+        }
+    }
+    if let NodeKind::Text(t) = &mut n.kind {
         for r in &mut t.runs {
-            if let Paint::Solid { color: c, .. } = &mut r.style.fill {
-                *c = c.lerp(color, amount);
-            }
+            turn_paint(&mut r.style.fill, degrees);
+            turn_paint(&mut r.style.stroke, degrees);
         }
     }
     if let Some(ch) = n.children_mut() {
         for c in ch.iter_mut() {
-            tint_node(Arc::make_mut(c), color, amount);
+            turn_hues(Arc::make_mut(c), degrees);
         }
     }
 }
 
-/// The stain instance `inst` puts on its symbol's art: its visible fill colour and that fill's
-/// opacity (how far the art mixes towards it). `None` for an unstained instance.
-pub fn stain(inst: &Node) -> Option<(Color, f32)> {
-    let f = inst.appearance.fill().filter(|f| f.visible)?;
-    Some((f.paint.color()?, f.opacity))
+/// Strip the brushes from every stroke under `n`, its masks' art included.
+fn strip_brushes(n: &mut Node) {
+    for it in &mut n.appearance.items {
+        if let AppearanceItem::Stroke(s) = it {
+            s.brush = None;
+        }
+    }
+    if let Some(ch) = n.children_mut() {
+        for c in ch.iter_mut() {
+            strip_brushes(Arc::make_mut(c));
+        }
+    }
+    if let Some(m) = n.extras_if_any().and_then(|e| e.mask.as_mut()) {
+        strip_brushes(Arc::make_mut(&mut m.art));
+    }
 }
 
-/// A symbol's art for instance `inst`, stained by the instance's fill ([`stain`]).
-pub fn instance_art(art: &Node, inst: &Node) -> Node {
-    let mut a = art.clone();
-    if let Some((c, amount)) = stain(inst) {
-        tint_node(&mut a, &c, amount);
-    }
-    a
-}
+/// The Symbol Stainer's mix, an instance's stain and its stained art, from
+/// [`vectorz_doc::symbol_overrides`], which the effects that reshape an instance also read.
+pub use vectorz_doc::symbol_overrides::{instance_art, stain, tint_node};
 
 /// The solid colours of the fills and strokes under `nodes`, most used first (then in the order
 /// they first appear): the colours Brush Options offers as Hue Shift's key colour, the first being
 /// its default.
+/// Type's characters count as well: each run's fill, and its stroke when the stroke is wider
+/// than 0.
 pub fn art_colors<'a>(nodes: impl IntoIterator<Item = &'a Node>) -> Vec<Color> {
     fn walk(n: &Node, seen: &mut std::collections::HashMap<String, (usize, usize, Color)>) {
         for it in &n.appearance.items {
@@ -129,6 +202,15 @@ pub fn art_colors<'a>(nodes: impl IntoIterator<Item = &'a Node>) -> Vec<Color> {
             if let (true, Some(c)) = (visible, paint.color()) {
                 let order = seen.len();
                 seen.entry(c.to_hex()).or_insert((0, order, c)).0 += 1;
+            }
+        }
+        if let NodeKind::Text(t) = &n.kind {
+            for r in &t.runs {
+                let stroke = (r.style.stroke_width > 0.0).then_some(&r.style.stroke);
+                for c in [Some(&r.style.fill), stroke].into_iter().flatten().filter_map(Paint::color) {
+                    let order = seen.len();
+                    seen.entry(c.to_hex()).or_insert((0, order, c)).0 += 1;
+                }
             }
         }
         for c in n.children().into_iter().flatten() {

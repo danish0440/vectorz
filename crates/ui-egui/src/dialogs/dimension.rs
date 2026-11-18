@@ -4,7 +4,7 @@ use super::DialogSpec;
 use crate::{VectorzApp, state::Dialog, theme::Tokens, widgets};
 use egui::{RichText, Ui};
 use serde_json::{Value, json};
-use vectorz_doc::dimension::DimensionOptions;
+use vectorz_doc::dimension::{ArrowStyle, DimensionOptions};
 
 pub const KIND: &str = "dimensionOptions";
 pub(super) const SPEC: DialogSpec = DialogSpec {
@@ -32,6 +32,10 @@ const UNITS: Choices = &[
 ];
 const LINE_TYPES: Choices = &[("solid", "Solid"), ("dashed", "Dashed"), ("dotted", "Dotted")];
 const ARROWS: Choices = &[("filled", "Filled"), ("open", "Open"), ("tick", "Tick"), ("none", "None")];
+/// The style of each `ARROWS` entry, in the same order.
+const ARROW_STYLES: [ArrowStyle; 4] = [ArrowStyle::Filled, ArrowStyle::Open, ArrowStyle::Tick, ArrowStyle::None];
+/// The size of an Arrow Style preview: a line with the head at its right end.
+const ARROW_PREVIEW: egui::Vec2 = egui::vec2(40.0, 16.0);
 const POSITIONS: Choices = &[("away", "Away from the Line"), ("between", "Between Line and Object")];
 const ALIGNMENTS: Choices = &[("left", "Left"), ("center", "Center"), ("right", "Right")];
 
@@ -69,12 +73,35 @@ fn choose(ui: &mut Ui, fields: &mut serde_json::Map<String, Value>, key: &str, l
     });
     changed
 }
+/// The Arrow Style dropdown: each style shows a drawn preview of its arrowhead before its name, in
+/// the open list and in the closed field.
+fn arrow_style(ui: &mut Ui, fields: &mut serde_json::Map<String, Value>, id: &str) -> bool {
+    const KEY: &str = "arrowStyle";
+    let mut changed = false;
+    widgets::label_row(ui, tl!("Arrow Style:"), 96.0, |ui| {
+        let current = fields.get(KEY).and_then(Value::as_str).unwrap_or_default();
+        let shown = ARROWS.iter().position(|(v, _)| *v == current);
+        let names: Vec<&str> = ARROWS.iter().map(|(_, s)| tl!(*s)).collect();
+        let icon = |ui: &Ui, rect: egui::Rect, i: usize, ink: egui::Color32, _: bool| {
+            if let Some(style) = ARROW_STYLES.get(i) {
+                crate::panels::stroke::paint_arrow(ui, rect, style.arrowhead().as_ref(), false, ink);
+            }
+        };
+        if let Some((value, _)) =
+            widgets::dropdown_icon_names_sized(ui, ("dimension", id), shown, &names, 150.0, ARROW_PREVIEW, icon).and_then(|i| ARROWS.get(i))
+        {
+            fields.insert(KEY.into(), json!(value));
+            changed = true;
+        }
+    });
+    changed
+}
 fn number(ui: &mut Ui, fields: &mut serde_json::Map<String, Value>, key: &str, label: &str, range: (f64, f64), suffix: &str) -> bool {
     let mut changed = false;
     widgets::label_row(ui, tl!(label), 96.0, |ui| {
         let value = fields.get(key).and_then(Value::as_f64).unwrap_or_default();
-        if let Some(v) = widgets::plain_field(ui, ("dimension", key), value, suffix, 2, 90.0) {
-            fields.insert(key.into(), json!(v.clamp(range.0, range.1)));
+        if let Some(v) = widgets::range_field(ui, ("dimension", key), value, range.0..=range.1, suffix, 2, 90.0) {
+            fields.insert(key.into(), json!(v));
             changed = true;
         }
     });
@@ -100,10 +127,12 @@ fn precision(ui: &mut Ui, fields: &mut serde_json::Map<String, Value>, id: &str)
     let before = fields.get("precision").and_then(Value::as_u64).unwrap_or(2) as u32;
     let mut value = before;
     ui.label(tl!("Precision:"));
-    egui::ComboBox::from_id_salt(id).selected_text(value.to_string()).width(55.0).show_ui(ui, |ui| {
-        for n in 0..=6 {
-            ui.selectable_value(&mut value, n, n.to_string());
-        }
+    ui.name_inputs(tl!("Precision"), |ui| {
+        craft_ui::ComboBox::from_id_salt(id).selected_text(value.to_string()).width(55.0).show_ui(ui, |ui| {
+            for n in 0..=6 {
+                ui.selectable_value(&mut value, n, n.to_string());
+            }
+        });
     });
     fields.insert("precision".into(), json!(value));
     value != before
@@ -129,15 +158,22 @@ fn body(app: &mut VectorzApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.horizontal(|ui| {
             widgets::label_row(ui, tl!("Scale:"), 96.0, |ui| {
                 let mut scale = f.get("scale").and_then(Value::as_str).unwrap_or_default().to_owned();
-                if ui.add(egui::TextEdit::singleline(&mut scale).desired_width(72.0)).changed() {
+                let changed = ui
+                    .name_inputs(tl!("Scale"), |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut scale).align(egui::Align2::LEFT_CENTER).desired_width(72.0))
+                    })
+                    .changed();
+                if changed {
                     f.insert("scale".into(), json!(scale));
                 }
-                egui::ComboBox::from_id_salt("dimension-scales").selected_text(tl!("Presets")).width(76.0).show_ui(ui, |ui| {
-                    for scale in ["1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100", "1:200", "2:1", "5:1", "10:1"] {
-                        if ui.selectable_label(false, scale).clicked() {
-                            f.insert("scale".into(), json!(scale));
+                ui.name_inputs(tl!("Scale Presets"), |ui| {
+                    craft_ui::ComboBox::from_id_salt("dimension-scales").selected_text(tl!("Presets")).width(76.0).show_ui(ui, |ui| {
+                        for scale in ["1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100", "1:200", "2:1", "5:1", "10:1"] {
+                            if ui.selectable_label(false, scale).clicked() {
+                                f.insert("scale".into(), json!(scale));
+                            }
                         }
-                    }
+                    });
                 });
             });
             check(ui, f, "hideUnits", "Hide Units");
@@ -151,7 +187,7 @@ fn body(app: &mut VectorzApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             color(ui, f, "lineColor");
         });
         ui.horizontal(|ui| {
-            choose(ui, f, "arrowStyle", "Arrow Style:", ARROWS);
+            arrow_style(ui, f, "arrowStyle");
             number(ui, f, "arrowScale", "Arrow Scale:", (1.0, 1000.0), "%");
         });
     });
@@ -202,7 +238,7 @@ fn body(app: &mut VectorzApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Ok(o) => {
             let sample = o.label(72.0, false).unwrap_or_default();
             let t = Tokens::get(ui.ctx());
-            ui.label(RichText::new(format!("{}: {sample}", tl!("Preview (1 inch on the page)"))).color(t.text));
+            ui.label(RichText::new(format!("{} {sample}", crate::i18n::colon(tl!("Preview (1 inch on the page)")))).color(t.text));
         }
         Err(e) => {
             ui.colored_label(Tokens::get(ui.ctx()).text, e);
@@ -223,11 +259,15 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     Ok(r)
 }
 
-/// The Dimension tool's strip: the kind of dimension, and Tool Options.
-pub fn controls(app: &mut VectorzApp, ui: &mut Ui) {
+/// The Dimension tool's strip: the kind of dimension, and Tool Options. In the Control bar
+/// (`reserve` given), each button shows only while the row has room for it and `reserve` after it,
+/// and the buttons after one left out are left out too; the floating strip (`None`) shows them all.
+pub fn controls(app: &mut VectorzApp, ui: &mut Ui, reserve: Option<f32>) {
+    let mut fit = reserve.map(crate::chrome::Fit::new);
+    let mut room = |ui: &Ui, text: &str| fit.as_mut().is_none_or(|f| f.room(ui, &[button_width(ui, text)]));
     let mode = app.session.tool_options()["mode"].as_str().unwrap_or("linear").to_owned();
     for (id, label) in [("linear", "Linear"), ("angular", "Angular"), ("radial", "Radial")] {
-        if ui.selectable_label(mode == id, tl!(label)).clicked() {
+        if room(ui, tl!(label)) && ui.selectable_label(mode == id, tl!(label)).clicked() {
             // Switching away cancels previews and unfinished picks.
             if let Err(e) = app
                 .run("tool.select", json!({"tool":"selection"}))
@@ -238,11 +278,18 @@ pub fn controls(app: &mut VectorzApp, ui: &mut Ui) {
             }
         }
     }
-    if ui.button(tl!("Tool Options…")).clicked()
+    if room(ui, tl!("Tool Options…"))
+        && ui.button(tl!("Tool Options…")).clicked()
         && let Err(e) = open(app)
     {
         app.ui.status = e;
     }
+}
+
+/// The width `ui.button` and `ui.selectable_label` give `text`: the text and the button padding on
+/// both sides.
+fn button_width(ui: &Ui, text: &str) -> f32 {
+    widgets::text_width(ui, RichText::new(text).text_style(egui::TextStyle::Button)) + 2.0 * ui.spacing().button_padding.x
 }
 
 /// Always available while measuring, including workspaces with the main Control bar hidden.
@@ -251,12 +298,12 @@ pub fn floating(app: &mut VectorzApp, ctx: &egui::Context) {
         return;
     }
     egui::Window::new(tl!("Dimension Tool"))
-        .id(egui::Id::new("dimension-strip"))
+        .id(egui::Id::unique("dimension-strip"))
         .default_pos(egui::pos2(90.0, 120.0))
         .resizable(false)
         .collapsible(false)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| controls(app, ui));
+            ui.horizontal(|ui| controls(app, ui, None));
             let mode = app.session.tool_options()["mode"].as_str().unwrap_or("linear").to_owned();
             let hint = match mode.as_str() {
                 "angular" => "Drag out from a corner, or click two straight lines, then click to place.",
@@ -290,7 +337,7 @@ pub fn properties_section(app: &mut VectorzApp, ui: &mut Ui) {
         changed |= number(ui, &mut f, "lineWeight", "Line Weight:", (0.1, 100.0), "pt");
         changed |= color(ui, &mut f, "lineColor");
     });
-    ui.horizontal(|ui| changed |= choose(ui, &mut f, "arrowStyle", "Arrow Style:", ARROWS));
+    ui.horizontal(|ui| changed |= arrow_style(ui, &mut f, "props-arrowStyle"));
     ui.horizontal(|ui| {
         changed |= number(ui, &mut f, "fontSize", "Font Size:", (1.0, 1000.0), "pt");
         changed |= color(ui, &mut f, "textColor");
@@ -355,6 +402,58 @@ mod tests {
         let text = crate::tests_labels::painted_text(&mut app, properties_section);
         for label in ["Dimension", "Units:", "Apply to All", "Set as Default"] {
             assert!(text.contains(label), "{label}: {text}");
+        }
+    }
+
+    /// Whether a frame drew a picture (a textured mesh) just before the text `name` on its line.
+    fn picture_before(out: &egui::FullOutput, name: &str) -> bool {
+        fn collect(s: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>, pictures: &mut Vec<egui::Rect>) {
+            match s {
+                egui::Shape::Text(t) => texts.push((t.galley.text().to_owned(), t.visual_bounding_rect())),
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => pictures.push(m.calc_bounds()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, texts, pictures)),
+                _ => {}
+            }
+        }
+        let (mut texts, mut pictures) = (vec![], vec![]);
+        for c in &out.shapes {
+            collect(&c.shape, &mut texts, &mut pictures);
+        }
+        texts
+            .iter()
+            .filter(|(t, _)| t == name)
+            .any(|(_, r)| pictures.iter().any(|p| p.max.x <= r.min.x + 1.0 && r.min.x - p.max.x < 16.0 && p.min.y < r.max.y && p.max.y > r.min.y))
+    }
+
+    /// The frame `f` draws, once its previews are loaded.
+    fn frame(app: &mut VectorzApp, mut f: impl FnMut(&mut VectorzApp, &mut Ui)) -> egui::FullOutput {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        ctx.run_ui(egui::RawInput::default(), |ui| f(app, ui)).textures_delta.clear();
+        ctx.run_ui(egui::RawInput::default(), |ui| f(app, ui))
+    }
+
+    /// The Arrow Style field of the Tool Options and of Properties shows the style's arrowhead,
+    /// drawn, before its name (#8049).
+    #[test]
+    fn arrow_style_shows_a_drawn_arrowhead() {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        app.run("tool.options", json!({"tool":"dimension"})).unwrap();
+        let out = frame(&mut app, |app, ui| super::super::show(app, ui.ctx()));
+        assert!(picture_before(&out, "Filled"), "Tool Options");
+        app.ui.dialog = None;
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.run("dimension.create", json!({"a":[10,10],"b":[110,10],"options":{"arrowStyle":"tick"}})).unwrap();
+        let out = frame(&mut app, properties_section);
+        assert!(picture_before(&out, "Tick"), "Properties");
+    }
+
+    /// Each Arrow Style entry previews the style its value names.
+    #[test]
+    fn arrow_previews_follow_the_listed_styles() {
+        assert_eq!(ARROWS.len(), ARROW_STYLES.len());
+        for ((value, _), style) in ARROWS.iter().zip(ARROW_STYLES) {
+            assert_eq!(serde_json::to_value(style).unwrap(), json!(value));
         }
     }
 }

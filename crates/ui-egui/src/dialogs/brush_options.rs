@@ -1,20 +1,34 @@
 //! Brush Options (double-click a brush in the Brushes panel, or the panel menu's Brush Options…).
-//! Calligraphic Brush Options: Name, then Angle, Roundness and Size, each Fixed, Random or
-//! Pressure with its Variation, over live previews of the nib and of a stroke (light, heavy, light
-//! pressure). Bristle Brush Options: Name, Shape and the bristle sliders. Scatter, Art and Pattern
-//! Brush Options: see [`super::brush_art_options`]. OK runs `brush.options` (strokes painted with
-//! the brush update); a name another brush has keeps the dialog open.
+//! Calligraphic Brush Options: Name, then Angle, Roundness and Size, each Fixed, Random, Pressure,
+//! Tilt, Bearing or Rotation with its Variation, over live previews of the nib and of a stroke
+//! (light, heavy, light pressure). Bristle Brush Options: Name (typing stops at [`Bristle::MAX_NAME_CHARS`]
+//! characters), Shape and the bristle sliders. Scatter, Art and Pattern Brush Options: see
+//! [`super::brush_art_options`]. OK runs `brush.options` (strokes painted with the brush update);
+//! a name another brush has, or a new bristle brush name that is too long, keeps the dialog open.
 //!
 //! Fields: `__brush` (the brush's name), `__type` (`calligraphic` | `bristle` | `scatter` | `art` |
 //! `pattern`), `name`.
 //! Calligraphic: `angle` (−180..180°), `roundness` (0..100 %), `size` (0..1296 pt), and per value
-//! `angleMode`, `roundnessMode`, `sizeMode` (`fixed` | `random` | `pressure`) and
+//! `angleMode`, `roundnessMode`, `sizeMode` (`fixed` | `random` | `pressure` | `tilt` | `bearing` |
+//! `rotation`) and
 //! `angleVariation`, `roundnessVariation`, `sizeVariation`. Bristle: `shape` (`roundPoint`…),
 //! `size` (pt), `length` (25..300 %), `density`, `thickness`, `opacity`, `stiffness` (1..100 %).
+//!
+//! New Brush opens the dialog for a brush that does not exist yet ([`open_new`]), with `__create`
+//! and, for dropped art, `__ids`: OK runs `brush.new` instead, which gives a name another brush has
+//! a number, and Cancel adds nothing.
+//!
+//! The panel menu's Options of Selected Object opens the dialog on the brush of the first selected
+//! brushed path, with that path's own settings ([`open_object`]), with `__object`, `__targets` (the
+//! brushed paths), `__opened` (the values it opened with) and `__doc` (the uid of the document). It
+//! has no name, and of the Art and Pattern brush options only those a path can set for itself. OK
+//! runs `brush.objectOptions` with the values changed since it opened: the paths change and the
+//! brush stays as it is. OK after another document has become the active one changes nothing.
 
 use egui::{Color32, Sense, Stroke, pos2, vec2};
 use serde_json::{Map, Value, json};
 use vectorz_brush::{Bristle, Brush, BrushKind, Calligraphic, Variation};
+use vectorz_doc::{AppearanceItem, NodeId, NodeKind};
 
 use super::swatch_options::{grid, label};
 use super::{DialogSpec, brush_art_options, form};
@@ -25,7 +39,25 @@ use crate::{VectorzApp, widgets};
 /// The dialog kind of Brush Options.
 pub const KIND: &str = "brushOptions";
 
-pub(super) const SPEC: DialogSpec = DialogSpec { heading, body, confirm, min_width: 440.0, ..DialogSpec::FORM };
+pub(super) const SPEC: DialogSpec = DialogSpec { heading, body, confirm: ok, min_width: 440.0, inputs: |_| &["tips"], ..DialogSpec::FORM };
+
+/// The field of a Brush Options dialog that New Brush opened.
+const CREATE: &str = "__create";
+
+/// The field of such a dialog holding the ids of the art dropped on the Brushes panel.
+const IDS: &str = "__ids";
+
+/// The field of a Brush Options dialog that Options of Selected Object opened.
+pub(super) const OBJECT: &str = "__object";
+
+/// The field of such a dialog holding the brushed paths it sets.
+const TARGETS: &str = "__targets";
+
+/// The field of such a dialog holding the `brush.objectOptions` params it opened with.
+const OPENED: &str = "__opened";
+
+/// The field of such a dialog holding the uid of the document it opened in.
+const DOC: &str = "__doc";
 
 /// Calligraphic values: (field, label, suffix, decimals), in [`Calligraphic::RANGES`] order.
 const CALLI: [(&str, &str, &str, usize); 3] = [("angle", "Angle:", "°", 0), ("roundness", "Roundness:", "%", 0), ("size", "Size:", " pt", 1)];
@@ -61,6 +93,9 @@ const NIB_W: f32 = 120.0;
 const STROKE_W: f32 = 400.0;
 
 fn heading(d: &Dialog) -> String {
+    if d.bool(OBJECT) {
+        return tl!("Options of Selected Object").into();
+    }
     match d.str("__type").as_str() {
         "bristle" => tl!("Bristle Brush Options").into(),
         "calligraphic" => tl!("Calligraphic Brush Options").into(),
@@ -84,8 +119,19 @@ pub fn open(app: &mut VectorzApp, name: Option<&str>) -> Result<Value, String> {
     };
     let def = app.run("brush.get", json!({ "name": name }))?;
     let b: Brush = serde_json::from_value(def.clone()).map_err(|e| e.to_string())?;
-    let mut f = Map::new();
+    let mut f = fields(&b, def)?;
     f.insert("__brush".into(), json!(b.name));
+    if let Some(st) = app.session.active() {
+        f.insert("__patterns".into(), serde_json::to_value(&st.doc.patterns).unwrap_or_default());
+    }
+    brush_art_options::reconcile_pattern_choices(&mut f);
+    app.ui.dialog = Some(Dialog { kind: KIND.into(), fields: f });
+    Ok(Value::Null)
+}
+
+/// The fields of brush `b`, whose definition is `def`.
+fn fields(b: &Brush, def: Value) -> Result<Map<String, Value>, String> {
+    let mut f = Map::new();
     f.insert("name".into(), json!(b.name));
     f.insert("__type".into(), json!(b.kind.type_id()));
     match &b.kind {
@@ -105,10 +151,9 @@ pub fn open(app: &mut VectorzApp, name: Option<&str>) -> Result<Value, String> {
             }
         }
         // The definition goes along, for the preview (and the art it carries).
-        BrushKind::Scatter(_) | BrushKind::Art(_) | BrushKind::Pattern(_) => brush_art_options::fields(&b, def, &mut f),
+        BrushKind::Scatter(_) | BrushKind::Art(_) | BrushKind::Pattern(_) => brush_art_options::fields(b, def, &mut f),
     }
-    app.ui.dialog = Some(Dialog { kind: KIND.into(), fields: f });
-    Ok(Value::Null)
+    Ok(f)
 }
 
 /// Can Brush Options open without a name (the selected path's brush, else the current one, exists)?
@@ -124,9 +169,230 @@ fn target(app: &VectorzApp) -> Option<String> {
     selected.or_else(|| vectorz_brush::current(&st.doc))
 }
 
+/// The brush that the first brushed stroke of path `id` paints with, in library `lib`.
+fn stroke_brush<'a>(app: &VectorzApp, lib: &'a [Brush], id: NodeId) -> Option<&'a Brush> {
+    let n = app.session.active()?.doc.node(id)?;
+    n.appearance.items.iter().find_map(|i| match i {
+        AppearanceItem::Stroke(st) => st.brush.as_deref().and_then(|name| lib.iter().find(|b| b.name == name)),
+        AppearanceItem::Fill(_) => None,
+    })
+}
+
+/// Can Options of Selected Object open: does a selected path or compound path (or one in a
+/// selected group, but not a path inside a compound path, as `brush.objectOptions` takes them)
+/// paint with a brush, are all their brushes of one type, and can a path set options of its own
+/// for that type? These are the selections `brush.objectOptions` takes.
+pub fn object_available(app: &VectorzApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let ids = st.selection.subjects();
+    if ids.is_empty() {
+        return false;
+    }
+    let lib = vectorz_brush::library(&st.doc);
+    let doc = &st.doc;
+    // The brush of every brushed stroke of the paths the command sets.
+    let mut brushes: Vec<&Brush> = vec![];
+    for id in ids {
+        let Some(n) = doc.node(*id) else { continue };
+        n.walk(&mut |c| {
+            let own = matches!(c.kind, NodeKind::Path { guide: false, clipping: false, .. } | NodeKind::Compound { .. });
+            let in_compound = doc.parent_of(c.id).and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::Compound { .. }));
+            if !own || in_compound {
+                return;
+            }
+            for i in &c.appearance.items {
+                if let AppearanceItem::Stroke(s) = i
+                    && let Some(b) = s.brush.as_deref().and_then(|name| lib.iter().find(|b| b.name == name))
+                {
+                    brushes.push(b);
+                }
+            }
+        });
+    }
+    let Some(first) = brushes.first() else { return false };
+    !first.kind.stroke_option_keys().is_empty() && brushes.iter().all(|b| b.kind.type_id() == first.kind.type_id())
+}
+
+/// Open Options of Selected Object: the Brush Options of the brush the first selected brushed path
+/// paints with, at that path's own settings, without the name and with only the options a path can
+/// set for itself.
+pub fn open_object(app: &mut VectorzApp) -> Result<Value, String> {
+    let r = app.run("brush.objectOptions", json!({}))?;
+    let targets = r["ids"].clone();
+    let first = targets.get(0).and_then(Value::as_u64).map(NodeId).ok_or("no path painted with a brush is selected")?;
+    let st = app.session.active().ok_or("no document open")?;
+    let (lib, doc) = (vectorz_brush::library(&st.doc), st.uid);
+    let b = stroke_brush(app, &lib, first).ok_or("no path painted with a brush is selected")?;
+    let own: Map<String, Value> = serde_json::from_value(r["options"].clone()).unwrap_or_default();
+    let edited = b.with_stroke_options(&own)?;
+    let def = serde_json::to_value(&edited).map_err(|e| e.to_string())?;
+    let mut f = fields(&edited, def)?;
+    f.insert("__brush".into(), json!(b.name));
+    f.insert(OBJECT.into(), json!(true));
+    f.insert(TARGETS.into(), targets);
+    f.insert(DOC.into(), json!(doc));
+    let mut d = Dialog { kind: KIND.into(), fields: f };
+    let opened = object_params(&d, b.kind.stroke_option_keys());
+    d.fields.insert(OPENED.into(), Value::Object(opened));
+    d.fields.insert("__keys".into(), json!(b.kind.stroke_option_keys()));
+    app.ui.dialog = Some(d);
+    Ok(Value::Null)
+}
+
+/// The fields' `brush.options` params that a path can set for itself (`keys`).
+fn object_params(d: &Dialog, keys: &[&str]) -> Map<String, Value> {
+    match params(d) {
+        Value::Object(p) => p.into_iter().filter(|(k, _)| keys.contains(&k.as_str())).collect(),
+        _ => Map::new(),
+    }
+}
+
+/// What of option value `now` changed from `was`, the value it opened with: `None` when nothing
+/// did; of a range or a list of modes, the items that changed with `null` for the others, and of a
+/// colorization, the fields that changed. The paths keep their own values for the rest.
+fn changed_part(was: Option<&Value>, now: Value) -> Option<Value> {
+    match (was, now) {
+        (Some(w), n) if *w == n => None,
+        (Some(Value::Array(w)), Value::Array(n)) if w.len() == n.len() => {
+            Some(Value::Array(w.iter().zip(n).map(|(w, n)| if *w == n { Value::Null } else { n }).collect()))
+        }
+        (Some(Value::Object(w)), Value::Object(n)) => Some(Value::Object(n.into_iter().filter(|(f, v)| w.get(f) != Some(v)).collect())),
+        (_, n) => Some(n),
+    }
+}
+
+/// OK of Options of Selected Object: `brush.objectOptions` on the paths it opened for, with the
+/// values changed since it opened ([`changed_part`]). The dialog closes when they are set. When
+/// another document has become the active one, it closes as Cancel does and changes nothing.
+fn confirm_object(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
+    if d.fields.get(DOC).and_then(Value::as_u64) != app.session.active().map(|doc| doc.uid) {
+        app.ui.dialog = None;
+        return Ok(json!({}));
+    }
+    let keys: Vec<String> = d.fields.get("__keys").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let opened = d.fields.get(OPENED).and_then(Value::as_object).cloned().unwrap_or_default();
+    let changed: Map<String, Value> =
+        object_params(d, &keys).into_iter().filter_map(|(k, v)| changed_part(opened.get(&k), v).map(|v| (k, v))).collect();
+    let r = app.run("brush.objectOptions", json!({ "ids": d.fields.get(TARGETS).cloned().unwrap_or_default(), "params": changed }));
+    if r.is_ok() {
+        app.ui.dialog = None;
+    }
+    r
+}
+
+/// Open the Brush Options of a new brush of type `ty` (`calligraphic` | `scatter` | `art` |
+/// `bristle` | `pattern`), the second step of New Brush. The fields start from the type's default
+/// values and the name "New <Type> Brush", numbered when another brush has it. A scatter or art
+/// brush takes the art `brush.selectionArt` gives for `ids` (else for the selection) as its art,
+/// and a pattern brush takes it as its side tile; the preview draws it. Without that art nothing
+/// opens.
+pub(super) fn open_new(app: &mut VectorzApp, ty: &str, ids: Option<Value>) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document open")?;
+    let patterns = serde_json::to_value(&st.doc.patterns).unwrap_or_default();
+    let title: String = ty.chars().take(1).flat_map(char::to_uppercase).chain(ty.chars().skip(1)).collect();
+    let name = vectorz_brush::unique_name(&vectorz_brush::library(&st.doc), &format!("New {title} Brush"));
+    let mut def = json!({ "name": name, "type": ty });
+    let art_key = match ty {
+        "scatter" | "art" => Some("art"),
+        "pattern" => Some("side"),
+        _ => None,
+    };
+    if let Some(key) = art_key {
+        let mut r = app.run("brush.selectionArt", ids.clone().map_or_else(|| json!({}), |ids| json!({ "ids": ids })))?;
+        let art = r["art"].take();
+        if art.is_null() {
+            return Err("nothing selected".into());
+        }
+        def[key] = art;
+    }
+    let mut b: Brush = serde_json::from_value(def).map_err(|e| e.to_string())?;
+    b.sanitize();
+    let def = serde_json::to_value(&b).map_err(|e| e.to_string())?;
+    let mut f = fields(&b, def)?;
+    f.insert("__patterns".into(), patterns);
+    brush_art_options::reconcile_pattern_choices(&mut f);
+    f.insert(CREATE.into(), json!(true));
+    if let Some(ids) = ids {
+        f.insert(IDS.into(), ids);
+    }
+    app.ui.dialog = Some(Dialog { kind: KIND.into(), fields: f });
+    Ok(Value::Null)
+}
+
+/// OK of a new brush's Brush Options: `brush.new` with the type, the name, the values set, the art
+/// the dialog opened with (`art` or `side` of `__def`, which the preview draws) and the dropped
+/// art's ids. A selection changed or cleared while the dialog is open does not change the art. The
+/// dialog closes once the brush is made.
+fn create(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
+    let mut brush_params = params(d);
+    if d.str("__type") == "pattern" {
+        if d.str("sideTile") == "none" {
+            return Err("You must choose a side pattern.".into());
+        }
+        let preview = brush_art_options::edited_def(d);
+        for key in [
+            "side",
+            "side_frame",
+            "side_swatch",
+            "outer_corner",
+            "outer_corner_frame",
+            "outer_corner_swatch",
+            "outer_source",
+            "inner_corner",
+            "inner_corner_frame",
+            "inner_corner_swatch",
+            "inner_source",
+            "start",
+            "start_frame",
+            "start_swatch",
+            "end",
+            "end_frame",
+            "end_swatch",
+        ] {
+            if let Some(value) = preview.get(key) {
+                brush_params[key] = value.clone();
+            }
+        }
+    }
+    if let Some(def) = d.fields.get("__def") {
+        for key in ["art", "side"] {
+            if let Some(art) = def.get(key).filter(|v| !v.is_null() && brush_params.get(key).is_none_or(Value::is_null)) {
+                brush_params[key] = art.clone();
+            }
+        }
+    }
+    let mut p = json!({ "type": d.str("__type"), "name": d.str("name").trim(), "params": brush_params });
+    if let Some(ids) = d.fields.get(IDS) {
+        p["ids"] = ids.clone();
+    }
+    let r = app.run("brush.new", p);
+    if r.is_ok() {
+        app.ui.dialog = None;
+    }
+    r
+}
+
+/// OK: make the new brush when New Brush opened the dialog, else edit the brush.
+fn ok(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
+    if d.bool(CREATE) {
+        create(app, d)
+    } else if d.bool(OBJECT) {
+        confirm_object(app, d)
+    } else {
+        confirm(app, d)
+    }
+}
+
 /// The value of field `key` within `range`.
 pub(super) fn clamped(d: &Dialog, key: &str, (lo, hi): (f64, f64)) -> f64 {
     d.f64(key, lo).clamp(lo, hi)
+}
+
+/// Is `d` Scatter, Art or Pattern Brush Options with Colorization Tips open? Escape then closes
+/// Tips, not the dialog.
+pub(crate) fn tips_open(d: &Dialog) -> bool {
+    d.kind == KIND && d.bool("tips") && !matches!(d.str("__type").as_str(), "bristle" | "calligraphic")
 }
 
 /// The Calligraphic brush the fields describe.
@@ -154,26 +420,30 @@ fn params(d: &Dialog) -> Value {
 }
 
 fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
-    grid(ui, |ui| {
-        label(ui, tl!("Name:"));
-        form::text(ui, d, "name", 240.0);
-        ui.end_row();
-    });
-    ui.add_space(10.0);
+    // Options of Selected Object sets a path's settings, not the brush, so it has no name.
+    if !d.bool(OBJECT) {
+        grid(ui, |ui| {
+            label(ui, tl!("Name:"));
+            let max = if d.str("__type") == "bristle" { Bristle::MAX_NAME_CHARS } else { usize::MAX };
+            form::text_edit_limited(ui, d, "name", 240.0, max);
+            ui.end_row();
+        });
+        ui.add_space(10.0);
+    }
     match d.str("__type").as_str() {
         "bristle" => bristle_body(app, ui, d),
-        "calligraphic" => calligraphic_body(ui, d),
-        _ => brush_art_options::body(ui, d),
+        "calligraphic" => calligraphic_body(app, ui, d),
+        _ => brush_art_options::body(app, ui, d),
     }
     false
 }
 
-fn calligraphic_body(ui: &mut egui::Ui, d: &mut Dialog) {
+fn calligraphic_body(app: &VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let c = calligraphic(d);
     ui.horizontal(|ui| {
         nib_preview(ui, &c, vec2(NIB_W, 84.0));
         ui.add_space(8.0);
-        stroke_preview(ui, "calligraphic", serde_json::to_value(&c).unwrap_or_default(), vec2(STROKE_W - NIB_W - 8.0, 84.0));
+        stroke_preview(app, ui, "calligraphic", serde_json::to_value(&c).unwrap_or_default(), vec2(STROKE_W - NIB_W - 8.0, 84.0));
     });
     ui.add_space(12.0);
     egui::Grid::new("brush-options-calli").num_columns(5).spacing([8.0, 8.0]).show(ui, |ui| {
@@ -211,15 +481,20 @@ fn bristle_body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) {
     }
     ui.add_space(8.0);
     let p = params(d);
-    stroke_preview(ui, "bristle", p, vec2(STROKE_W, 64.0));
+    stroke_preview(app, ui, "bristle", p, vec2(STROKE_W, 64.0));
 }
 
-/// A stroke painted with the brush the fields describe (type `ty`, definition fields `def`).
-pub(super) fn stroke_preview(ui: &mut egui::Ui, ty: &str, mut def: Value, size: egui::Vec2) {
-    def["name"] = json!("preview");
-    def["type"] = json!(ty);
+/// A stroke painted with the brush the fields describe (type `ty`, definition fields `def`), with
+/// the active document's resources (the patterns, symbols… its art uses).
+pub(super) fn stroke_preview(app: &VectorzApp, ui: &mut egui::Ui, ty: &str, def: Value, size: egui::Vec2) {
+    let mut def = match def {
+        Value::Object(o) => o,
+        _ => Map::new(),
+    };
+    def.insert("name".into(), json!("preview"));
+    def.insert("type".into(), json!(ty));
     let (r, _) = ui.allocate_exact_size(size, Sense::hover());
-    crate::panels::brushes::chip(ui, r, &def);
+    crate::panels::brushes::definition_chip(ui, r, app.session.active(), &Value::Object(def));
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, Tokens::get(ui.ctx()).input_border), egui::StrokeKind::Inside);
 }
 
@@ -237,9 +512,9 @@ fn nib_preview(ui: &mut egui::Ui, c: &Calligraphic, size: egui::Vec2) {
     let at = |sign: f64| -> [f64; 3] {
         let mut v = values;
         for (i, (x, mode)) in v.iter_mut().zip(c.modes()).enumerate() {
-            let (Some(&var), Some(&(lo, hi))) = (c.variation.get(i), Calligraphic::RANGES.get(i)) else { continue };
+            let Some(&var) = c.variation.get(i) else { continue };
             if mode != Variation::Fixed {
-                *x = (*x + sign * var).clamp(lo, hi);
+                *x = Calligraphic::moved(i, *x, sign * var);
             }
         }
         v
@@ -263,7 +538,8 @@ fn nib_preview(ui: &mut egui::Ui, c: &Calligraphic, size: egui::Vec2) {
     p.rect_stroke(r, 0.0, Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
 }
 
-/// OK: edit the brush (and rename it). A name another brush has keeps the dialog open.
+/// OK: edit the brush (and rename it). A name another brush has, or a new bristle brush name that
+/// is too long, keeps the dialog open.
 fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let name = d.str("name").trim().to_string();
     let r = app.run("brush.options", json!({ "name": d.str("__brush"), "newName": name, "params": params(d) }));
@@ -274,223 +550,4 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use vectorz_engine::Session;
-
-    fn app() -> VectorzApp {
-        let mut app = VectorzApp::new(Session::new(), Default::default());
-        app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
-        app
-    }
-
-    fn set(app: &mut VectorzApp, fields: Value) {
-        let d = app.ui.dialog.as_mut().unwrap();
-        for (k, v) in fields.as_object().unwrap() {
-            d.fields.insert(k.clone(), v.clone());
-        }
-    }
-
-    fn shown(app: &mut VectorzApp) -> String {
-        crate::tests_labels::painted_text(app, |app, ui| super::super::show(app, ui.ctx()))
-    }
-
-    #[test]
-    fn calligraphic_options_show_each_value_with_its_variation_and_ok_applies_them() {
-        let mut app = app();
-        app.run("ui.brushOptions", json!({"name": "6 pt. Flat"})).unwrap();
-        let text = shown(&mut app);
-        for label in ["Calligraphic Brush Options", "Name:", "Angle:", "Roundness:", "Size:", "Variation:", "Fixed", "OK", "Cancel"] {
-            assert!(text.contains(label), "{label} in {text}");
-        }
-        let d = app.ui.dialog.as_ref().unwrap();
-        assert_eq!((d.f64("angle", 0.0), d.f64("roundness", 0.0), d.f64("size", 0.0)), (45.0, 15.0, 6.0));
-        // Out-of-range values are kept within their ranges.
-        set(&mut app, json!({"angleMode": "random", "angleVariation": 500, "roundness": 140, "sizeMode": "pressure", "sizeVariation": 4}));
-        assert!(shown(&mut app).contains("Pressure"));
-        super::super::confirm(&mut app).unwrap();
-        let def = app.run("brush.get", json!({"name": "6 pt. Flat"})).unwrap();
-        assert_eq!(def["modes"], json!(["random", "fixed", "pressure"]));
-        assert_eq!((def["variation"].clone(), def["roundness"].clone()), (json!([180.0, 0.0, 4.0]), json!(100.0)));
-        // Opened again, it shows what was set.
-        app.run("ui.brushOptions", json!({"name": "6 pt. Flat"})).unwrap();
-        let d = app.ui.dialog.as_ref().unwrap();
-        assert_eq!((d.str("angleMode"), d.f64("sizeVariation", 0.0)), ("random".into(), 4.0));
-    }
-
-    #[test]
-    fn a_taken_name_keeps_the_dialog_open() {
-        let mut app = app();
-        app.run("ui.brushOptions", json!({"name": "6 pt. Flat"})).unwrap();
-        set(&mut app, json!({"name": "3 pt. Round"}));
-        assert!(super::super::confirm(&mut app).is_err());
-        assert!(app.ui.dialog.is_some());
-    }
-
-    #[test]
-    fn bristle_options_and_an_unknown_brush() {
-        let mut app = app();
-        app.run("ui.brushOptions", json!({"name": "Bristle Round"})).unwrap();
-        let text = shown(&mut app);
-        for label in ["Bristle Brush Options", "Shape:", "Bristle Length:", "Stiffness:", "Paint Opacity:"] {
-            assert!(text.contains(label), "{label} in {text}");
-        }
-        set(&mut app, json!({"shape": "flatFan", "density": 0, "length": 120}));
-        super::super::confirm(&mut app).unwrap();
-        let def = app.run("brush.get", json!({"name": "Bristle Round"})).unwrap();
-        assert_eq!((def["shape"].clone(), def["density"].clone(), def["length"].clone()), (json!("flatFan"), json!(1.0), json!(120.0)));
-        // No such brush: an error, nothing opens.
-        app.ui.dialog = None;
-        assert!(app.run("ui.brushOptions", json!({"name": "Nope"})).is_err());
-        assert!(app.ui.dialog.is_none());
-    }
-
-    /// A path painted with brush `name`, and the height of the art its stroke draws.
-    fn brushed(app: &mut VectorzApp, name: &str) -> (vectorz_doc::NodeId, f64) {
-        let id = app.run("shape.line", json!({"x1": 20, "y1": 100, "x2": 280, "y2": 100})).unwrap()["id"].as_u64().unwrap();
-        let id = vectorz_doc::NodeId(id);
-        app.run("brush.apply", json!({ "name": name, "ids": [id.0] })).unwrap();
-        (id, drawn_height(app, id))
-    }
-
-    fn drawn_height(app: &VectorzApp, id: vectorz_doc::NodeId) -> f64 {
-        let st = app.session.active().unwrap();
-        let pieces = vectorz_brush::node_pieces(&st.doc, st.doc.node(id).unwrap()).unwrap();
-        vectorz_brush::pieces_bounds(&pieces).unwrap().height()
-    }
-
-    #[test]
-    fn scatter_options_show_each_value_with_its_mode_and_ok_applies_them() {
-        let mut app = app();
-        let (id, before) = brushed(&mut app, "Confetti");
-        app.run("ui.brushOptions", json!({"name": "Confetti"})).unwrap();
-        let text = shown(&mut app);
-        for label in [
-            "Scatter Brush Options",
-            "Name:",
-            "Size:",
-            "Spacing:",
-            "Scatter:",
-            "Rotation:",
-            "Random",
-            "Rotation relative to:",
-            "Page",
-            "Colorization",
-            "Method:",
-            "Tints",
-            "Key Color:",
-        ] {
-            assert!(text.contains(label), "{label} in {text}");
-        }
-        let d = app.ui.dialog.as_ref().unwrap();
-        assert_eq!((d.f64("sizeMin", 0.0), d.f64("sizeMax", 0.0), d.str("sizeMode")), (60.0, 140.0, "random".into()));
-        assert_eq!((d.str("rotationRelativeTo"), d.str("colorization")), ("page".into(), "tints".into()));
-        // Values are kept within their ranges (rotation here); Fixed takes the first value.
-        set(
-            &mut app,
-            json!({"sizeMode": "fixed", "sizeMin": 5000, "spacingMode": "pressure", "rotationMin": -400, "rotationRelativeTo": "path", "colorization": "hueShift"}),
-        );
-        assert!(shown(&mut app).contains("Hue Shift"));
-        super::super::confirm(&mut app).unwrap();
-        assert!(app.ui.dialog.is_none());
-        let def = app.run("brush.get", json!({"name": "Confetti"})).unwrap();
-        assert_eq!(
-            (&def["size"], &def["rotation"][0], &def["modes"]),
-            (&json!([5000.0, 140.0]), &json!(-180.0), &json!(["fixed", "pressure", "random", "random"]))
-        );
-        assert_eq!((&def["rotation_relative_to_path"], &def["colorization"]["method"]), (&json!(true), &json!("hueShift")));
-        assert!(def["colorization"]["key"].is_object(), "the art's colour as the key: {def}");
-        assert!(drawn_height(&app, id) > before, "the stroke redraws with the bigger confetti");
-        // Opened again, it shows what was set.
-        app.run("ui.brushOptions", json!({"name": "Confetti"})).unwrap();
-        let d = app.ui.dialog.as_ref().unwrap();
-        assert_eq!((d.str("sizeMode"), d.str("spacingMode"), d.str("colorization")), ("fixed".into(), "pressure".into(), "hueShift".into()));
-    }
-
-    #[test]
-    fn art_options_set_width_scale_direction_flips_and_colorization() {
-        let mut app = app();
-        let (id, before) = brushed(&mut app, "Arrow");
-        app.run("ui.brushOptions", json!({"name": "Arrow"})).unwrap();
-        let text = shown(&mut app);
-        for label in [
-            "Art Brush Options",
-            "Width:",
-            "Brush Scale Options",
-            "Scale Proportionately",
-            "Stretch to Fit Stroke Length",
-            "Stretch Between Guides",
-            "Start:",
-            "End:",
-            "Direction:",
-            "Flip Along",
-            "Flip Across",
-            "Colorization",
-        ] {
-            assert!(text.contains(label), "{label} in {text}");
-        }
-        let d = app.ui.dialog.as_ref().unwrap();
-        assert_eq!(
-            (d.f64("width", 0.0), d.str("scaleMode"), d.f64("guideEnd", 0.0), d.str("direction")),
-            (100.0, "betweenGuides".into(), 78.0, "leftToRight".into())
-        );
-        set(
-            &mut app,
-            json!({"width": 250, "guideStart": 10, "guideEnd": 140, "direction": "bottomToTop", "flipAcross": true, "colorization": "none"}),
-        );
-        super::super::confirm(&mut app).unwrap();
-        let def = app.run("brush.get", json!({"name": "Arrow"})).unwrap();
-        assert_eq!(
-            (&def["width"], &def["scale"], &def["direction"]),
-            (&json!(250.0), &json!({"mode": "betweenGuides", "start": 0.1, "end": 1.0}), &json!("bottomToTop"))
-        );
-        assert_eq!((&def["flip_across"], &def["flip_along"], &def["colorization"]), (&json!(true), &json!(false), &json!({"method": "none"})));
-        assert!(drawn_height(&app, id) != before, "the stroke redraws");
-        // Stretch to Fit drops the guides.
-        app.run("ui.brushOptions", json!({"name": "Arrow"})).unwrap();
-        set(&mut app, json!({"scaleMode": "stretch"}));
-        super::super::confirm(&mut app).unwrap();
-        assert_eq!(app.run("brush.get", json!({"name": "Arrow"})).unwrap()["scale"], json!({"mode": "stretch"}));
-    }
-
-    #[test]
-    fn pattern_options_show_the_tiles_and_set_scale_spacing_fit() {
-        let mut app = app();
-        app.run("ui.brushOptions", json!({"name": "Chain"})).unwrap();
-        let text = shown(&mut app);
-        for label in [
-            "Pattern Brush Options",
-            "Scale:",
-            "Spacing:",
-            "Outer Corner Tile",
-            "Side Tile",
-            "Inner Corner Tile",
-            "Start Tile",
-            "End Tile",
-            "None",
-            "Fit",
-            "Stretch to fit",
-            "Add space to fit",
-            "Approximate path",
-            "Flip Along",
-        ] {
-            assert!(text.contains(label), "{label} in {text}");
-        }
-        let d = app.ui.dialog.as_ref().unwrap();
-        let mut tiles: Vec<&String> = d.fields["__tiles"].as_object().unwrap().keys().collect();
-        tiles.sort();
-        assert_eq!(tiles, ["innerCorner", "outerCorner", "side"], "Chain has side and corner tiles, no start or end");
-        // Diamonds (straight-edged tiles, so sizes compare exactly).
-        let (id, before) = brushed(&mut app, "Diamonds");
-        app.run("ui.brushOptions", json!({"name": "Diamonds"})).unwrap();
-        assert_eq!((app.ui.dialog.as_ref().unwrap().f64("spacing", 0.0), app.ui.dialog.as_ref().unwrap().str("fit")), (25.0, "addSpace".into()));
-        set(&mut app, json!({"scale": 200, "spacing": 30, "fit": "approximate", "flipAlong": true}));
-        super::super::confirm(&mut app).unwrap();
-        let def = app.run("brush.get", json!({"name": "Diamonds"})).unwrap();
-        assert_eq!(
-            (&def["scale"], &def["spacing"], &def["fit"], &def["flip_along"]),
-            (&json!(200.0), &json!(30.0), &json!("approximate"), &json!(true))
-        );
-        assert!((drawn_height(&app, id) / before - 2.0).abs() < 1e-6, "tiles twice the size");
-    }
-}
+mod tests;

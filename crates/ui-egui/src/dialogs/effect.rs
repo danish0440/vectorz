@@ -22,8 +22,41 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
     body,
     confirm,
     preview: true,
+    // Load Texture… adds the texture it reads.
+    passes: |d, field| field == vectorz_effects::pixel::TEXTURE_IMAGE && loads_texture(&d.str("__effect")),
+    // OK could only fail the same way: off, beside the reason the dialog shows (#6140).
+    ok_enabled: Some(|_, d| !(vectorz_effects::is_three_d(&d.str("__effect")) && d.fields.contains_key(form::REFUSED))),
     ..DialogSpec::FORM
 };
+
+/// The field holding the values a 3D effect's dialog last tried with Preview off.
+const TRIED: &str = "__tried";
+
+/// A 3D effect refuses objects it can't build from and values it can't draw, in the dialog as OK
+/// would: shows why under Preview (#6140). With Preview off no preview has tried `params`, so they
+/// are tried here, when they change, and rolled back at once.
+fn three_d_refusal(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, cmd: &str, params: Value) {
+    if d.bool("preview") {
+        d.fields.remove(TRIED);
+    } else if !app.session.in_interaction() && d.fields.get(TRIED) != Some(&params) {
+        // Waits for another interaction to end: trying inside it would replace its preview and
+        // cancel it. A failure to begin leaves no interaction: the preview below then reports it.
+        let _ = app.begin_interaction(&d.str("__label"));
+        match app.session.preview(cmd, &params) {
+            Ok(_) => {
+                d.fields.remove(form::REFUSED);
+            }
+            Err(e) => form::note_refusal(d, &e),
+        }
+        // Only a try: without an interaction there is nothing to roll back.
+        let _ = app.session.cancel_interaction();
+        d.fields.insert(TRIED.into(), params);
+    }
+    if let Some(why) = d.fields.get(form::REFUSED).and_then(Value::as_str) {
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(egui::RichText::new(why).color(Tokens::get(ui.ctx()).warning)).wrap());
+    }
+}
 
 /// The effect's name (`__label`, English) in the UI language: the catalog may carry it with or
 /// without its trailing ellipsis. A plug-in effect's name is shown as it is.
@@ -41,6 +74,7 @@ fn heading_label(d: &Dialog) -> String {
 /// Fields: `__effect`, `__label`, `__item?` (as given to `effect.dialog`), `__target` and
 /// `__index` (the applied effect's item and position). OK edits it; `discard: true` then OK adds
 /// a new one.
+/// `__editTarget` stores the targets used when editing the applied effect.
 pub const EXISTS: &str = "effectExists";
 
 pub(super) const EXISTS_SPEC: DialogSpec = DialogSpec {
@@ -61,16 +95,25 @@ pub(super) const EXISTS_SPEC: DialogSpec = DialogSpec {
 /// or add `effect`, first asking when that list already has it.
 pub fn open(app: &mut VectorzApp, p: &Value) -> Result<Value, String> {
     let id = p.get("effect").and_then(Value::as_str).unwrap_or_default();
+    // An SVG filter is chosen and edited in Apply SVG Filter.
+    if id == vectorz_effects::SVG_FILTER {
+        return super::svg_filter::open(app, p);
+    }
     let info = vectorz_effects::effect_info(id).ok_or_else(|| format!("unknown effect `{id}`"))?;
     // The list the effect goes to: `item` as given, else the active item's (the object's without
     // one). A new effect keeps `item` unresolved, so `effect.apply` targets each object as usual.
     let target = p.get("item").cloned().unwrap_or_else(|| json!(app.session.appearance_item()));
-    let applied = target_effects(app, &target);
+    let (edit_target, applied) = target_effects(app, p);
+    let target = edit_target.get("item").cloned().unwrap_or(target);
     let mut fields = Map::new();
     fields.insert("__effect".into(), json!(id));
     fields.insert("__label".into(), json!(info.label.trim_end_matches('…')));
     if let Some(item) = p.get("item") {
         fields.insert("__item".into(), item.clone());
+    }
+    // A shared row of a mixed selection: OK edits each object's own copy of the effect.
+    if p.get("aligned").and_then(Value::as_bool) == Some(true) {
+        fields.insert("__aligned".into(), json!(true));
     }
     match p.get("index").and_then(Value::as_u64) {
         Some(k) => {
@@ -79,17 +122,22 @@ pub fn open(app: &mut VectorzApp, p: &Value) -> Result<Value, String> {
                 return Err(format!("effect {k} is `{}`, not `{id}`", e.id));
             }
             fields.insert("__item".into(), target);
+            fields.insert("__editTarget".into(), edit_target);
             fields.insert("__index".into(), json!(k));
             fields.extend(params_of(e));
         }
         None => {
             if let Some(k) = applied.iter().rposition(|e| e.id == id) {
                 fields.insert("__target".into(), target);
+                fields.insert("__editTarget".into(), edit_target);
                 fields.insert("__index".into(), json!(k));
                 app.ui.dialog = Some(Dialog { kind: EXISTS.into(), fields });
                 return Ok(json!({ "pending": EXISTS }));
             }
             fields.extend(info.defaults.as_object().cloned().unwrap_or_default());
+            if super::warp_effect::is_warp(id) {
+                super::warp_effect::merge_remembered(&mut fields, app.last_warp.as_ref());
+            }
         }
     }
     fields.insert("preview".into(), json!(true));
@@ -97,11 +145,14 @@ pub fn open(app: &mut VectorzApp, p: &Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-/// The effects of the first selected object that `item` (an index or null) addresses.
-fn target_effects(app: &VectorzApp, item: &Value) -> Vec<vectorz_doc::Effect> {
-    let Some(st) = app.session.active() else { return vec![] };
-    let node = st.selection.objects.first().and_then(|id| st.doc.node(*id));
-    node.and_then(|n| n.appearance.effects_at(item.as_u64().map(|i| i as usize))).cloned().unwrap_or_default()
+/// The function returns target parameters and effects at `item` (an index or null).
+/// An omitted `item` uses the active row.
+fn target_effects(app: &VectorzApp, p: &Value) -> (Value, Vec<vectorz_doc::Effect>) {
+    let mut params = json!({"aligned": p.get("aligned").and_then(Value::as_bool).unwrap_or(false)});
+    if let Some(item) = p.get("item") {
+        params["item"] = item.clone();
+    }
+    app.session.appearance_effect_target(&params).map(|(target, effects)| (target, effects.to_vec())).unwrap_or_else(|| (json!({}), vec![]))
 }
 
 /// An applied effect's values over its defaults.
@@ -119,11 +170,19 @@ fn confirm_exists(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let target = fields.remove("__target").unwrap_or(Value::Null);
     if d.bool("discard") {
         fields.remove("__index");
-        let defaults = vectorz_effects::default_params(&d.str("__effect"));
+        fields.remove("__editTarget");
+        let id = d.str("__effect");
+        let defaults = vectorz_effects::default_params(&id);
         fields.extend(defaults.and_then(|v| v.as_object().cloned()).unwrap_or_default());
+        if super::warp_effect::is_warp(id.as_str()) {
+            super::warp_effect::merge_remembered(&mut fields, app.last_warp.as_ref());
+        }
     } else {
         let k = fields.get("__index").and_then(Value::as_u64).unwrap_or(0) as usize;
-        fields.extend(target_effects(app, &target).get(k).map(params_of).unwrap_or_default());
+        let edit_target = fields.get("__editTarget").cloned().unwrap_or_else(|| json!({"item": target}));
+        let applied = app.session.appearance_effect_target(&edit_target).map(|(_, effects)| effects.to_vec()).unwrap_or_default();
+        let params = applied.get(k).map(params_of).unwrap_or_default();
+        fields.extend(params);
         fields.insert("__item".into(), target);
     }
     fields.insert("preview".into(), json!(true));
@@ -142,18 +201,34 @@ fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     if vectorz_effects::is_three_d(&id) {
         super::revolve::body(app, ui, d);
         let (cmd, params) = command(d);
-        form::preview(app, ui, d, &d.str("__label"), cmd, params);
+        form::preview(app, ui, d, &d.str("__label"), cmd, params.clone());
+        three_d_refusal(app, ui, d, cmd, params);
         return false;
     }
     // Plug-in effects get fields from their parameter schema; colour adjustments their sliders.
     let changed = match vectorz_plugins::effect::installed(&id) {
-        Some(plugin) => form::schema_fields(ui, d, &plugin.manifest().params),
-        None if vectorz_effects::is_adjustment(&id) => adjust_fields(ui, d),
-        None if id == GLASS => glass_fields(app, ui, d),
+        Some(plugin) => form::schema_fields(app, ui, d, plugin.manifest()),
+        // The Color Effects add-on's take the plain form of their parameters.
+        None if vectorz_effects::is_adjustment(&id) && !vectorz_effects::addons::color::is_color_effect(&id) => adjust_fields(ui, d),
+        None if id == vectorz_effects::addons::halftone::HALFTONE => {
+            super::halftone::screen_fields(ui, d);
+            values_changed(d)
+        }
+        None if id == vectorz_effects::addons::duotone::DUOTONE => {
+            super::duotone::fields(app, ui, d);
+            values_changed(d)
+        }
+        None if id == GLASS => glass_fields(app, ui, d, GLASS),
+        None if id == TEXTURIZER => glass_fields(app, ui, d, TEXTURIZER),
+        None if id == ROUGH_PASTELS => glass_fields(app, ui, d, ROUGH_PASTELS),
         None if id == TRANSFORM => transform_fields(ui, d, app.session.general_unit()),
-        None if id == ZIG_ZAG => zig_zag_fields(ui, d, app.session.general_unit()),
+        None if id == SCRIBBLE => scribble_fields(ui, d, app.session.general_unit()),
+        None if id == ZIG_ZAG || id == ROUGHEN => size_fields(ui, d, &id, app.session.general_unit()),
+        None if id == PUCKER_BLOAT => pucker_bloat_fields(ui, d),
+        None if id == TWEAK => tweak_fields(ui, d, app.session.general_unit()),
         None if id == DROP_SHADOW => drop_shadow_fields(ui, d, app.session.general_unit()),
         None if id == "artistic.filmGrain" => film_grain_fields(ui, d),
+        None if id == RADIAL_BLUR => radial_blur_fields(ui, d, app.session.general_unit()),
         None if id == free_distort::FREE_DISTORT => {
             free_distort::fields(app, ui, d);
             values_changed(d)
@@ -180,9 +255,14 @@ fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     d.fields.insert("preview".into(), json!(pv));
     if pv && (changed || pv_changed || !app.session.in_interaction()) {
         let label = d.str("__label");
-        let _ = app.session.begin_interaction(&label);
-        let (cmd, p) = command(d);
-        let _ = app.session.preview(cmd, &p);
+        // A failure to begin (typing that can't be kept) shows, and nothing previews.
+        match app.begin_interaction(&label) {
+            Ok(()) => {
+                let (cmd, p) = command(d);
+                let _ = app.session.preview(cmd, &p);
+            }
+            Err(e) => app.status(e),
+        }
     } else if !pv && pv_changed {
         let _ = app.session.cancel_interaction();
     }
@@ -192,6 +272,10 @@ fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
 /// Film Grain's bounded, whole-number controls, in the same order as its parameter docs.
 pub(crate) const FILM_GRAIN_FIELDS: [(&str, &str, f64); 3] =
     [("grain", "Grain", 20.0), ("highlightArea", "Highlight Area", 20.0), ("intensity", "Intensity", 10.0)];
+
+/// Paint Daubs › Brush Type labels ([`vectorz_effects::pixel::PAINT_DAUB_BRUSH_TYPES`]); extend
+/// [`crate::menus::menu_strings`] with these like [`FILM_GRAIN_FIELDS`].
+pub(crate) const PAINT_DAUB_BRUSH_TYPE_LABELS: [&str; 6] = ["Simple", "Light Rough", "Dark Rough", "Wide Sharp", "Wide Blurry", "Sparkle"];
 
 fn film_grain_fields(ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let before = d.fields.clone();
@@ -210,22 +294,161 @@ fn film_grain_fields(ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     before != d.fields
 }
 
+/// The Radial Blur effect (Effect › Blur › Radial Blur…).
+const RADIAL_BLUR: &str = "blur.radial";
+/// Radial Blur's Blur Center: its parameters (0..1 across and down the object's bounds).
+const BLUR_CENTER: [&str; 2] = ["centerX", "centerY"];
+
+/// Radial Blur: Amount, Blur Method and Quality as the other effects show their parameters, then
+/// the Blur Center box with its Horizontal and Vertical fields. Returns whether the values differ
+/// from those last previewed.
+fn radial_blur_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit) -> bool {
+    let before = d.fields.clone();
+    // The center is the box's, not a pair of plain number rows.
+    let center: Vec<(String, Value)> = BLUR_CENTER.iter().filter_map(|k| d.fields.remove(*k).map(|v| (k.to_string(), v))).collect();
+    let doc = vectorz_effects::effect_info(RADIAL_BLUR).map(|e| e.params).unwrap_or_default();
+    form::param_fields(ui, d, &|_| false, &|k| choices(RADIAL_BLUR, k), &|k| doc_rank(doc, k), unit);
+    d.fields.extend(center);
+    ui.add_space(6.0);
+    blur_center(ui, d);
+    before != d.fields
+}
+
+/// The Blur Center box's side (points).
+const CENTER_BOX: f32 = 120.0;
+
+/// A Blur Center coordinate kept to a hundredth of a percent of the box.
+fn center_round(x: f64) -> f64 {
+    (x * 1e4).round() / 1e4
+}
+
+/// The value screen readers give Blur Center at `c` (0 to 1 of the bounds): Horizontal and
+/// Vertical in percent, each label followed by the UI language's colon.
+pub(super) fn blur_center_value(c: [f64; 2]) -> String {
+    let percent = |v: f64| (v * 1000.0).round() / 10.0;
+    format!("{} {}%, {} {}%", crate::i18n::colon(tl!("Horizontal")), percent(c[0]), crate::i18n::colon(tl!("Vertical")), percent(c[1]))
+}
+
+/// Radial Blur's Blur Center: a box standing for the object's bounds, with the blur's pattern (rays
+/// for Zoom, rings for Spin) drawn about the center. A press or a drag in the box puts the center
+/// there; with the keyboard focus the arrow keys move it 1 % of the box (10 % with Shift). The
+/// Horizontal and Vertical fields beside it type the same position in percent of the bounds' width
+/// and height. The center the box shows, kept within 0 to 1, goes to `d.fields["centerX"]` and
+/// `["centerY"]`.
+fn blur_center(ui: &mut egui::Ui, d: &mut Dialog) {
+    use egui::{Key, Modifiers, Sense, Stroke};
+    let [kx, ky] = BLUR_CENTER;
+    let mut c = [d.f64(kx, 0.5).clamp(0.0, 1.0), d.f64(ky, 0.5).clamp(0.0, 1.0)];
+    let t = Tokens::get(ui.ctx());
+    let zoom = d.str("method").eq_ignore_ascii_case("zoom");
+    form::caption(ui, "Blur Center");
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(CENTER_BOX, CENTER_BOX), Sense::hover());
+        let id = ui.scope_id().with("radial-blur-center");
+        let resp = ui.interact(rect, id, Sense::click_and_drag());
+        let name = tl!("Blur Center").to_string();
+        let value = blur_center_value(c);
+        let enabled = ui.is_enabled();
+        resp.widget_info(|| egui::WidgetInfo {
+            current_text_value: Some(value.clone()),
+            ..egui::WidgetInfo::labeled(egui::Role::Slider, enabled, &name)
+        });
+        if resp.drag_started() || resp.clicked() {
+            resp.request_focus();
+        }
+        if let Some(p) = resp.interact_pointer_pos()
+            && (resp.dragged() || resp.clicked() || resp.drag_started())
+        {
+            let unit = |v: f32, lo: f32| f64::from(((v - lo) / CENTER_BOX).clamp(0.0, 1.0));
+            c = [center_round(unit(p.x, rect.left())), center_round(unit(p.y, rect.top()))];
+        }
+        if resp.has_focus() {
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() })
+            });
+            for (key, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
+                // Shift first: a key without modifiers also matches the key with Shift.
+                for (modifiers, step) in [(Modifiers::SHIFT, 0.1), (Modifiers::NONE, 0.01)] {
+                    if ui.input_mut(|i| i.consume_key(modifiers, key)) {
+                        c = [center_round((c[0] + dx * step).clamp(0.0, 1.0)), center_round((c[1] + dy * step).clamp(0.0, 1.0))];
+                    }
+                }
+            }
+        }
+        if resp.hovered() || resp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        // The box, and the pattern about the center: rays for Zoom, rings for Spin.
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.0, t.input);
+        let at = egui::pos2(rect.left() + c[0] as f32 * CENTER_BOX, rect.top() + c[1] as f32 * CENTER_BOX);
+        let faint = Stroke::new(1.0, t.text_dim.gamma_multiply(0.6));
+        let reach = CENTER_BOX * std::f32::consts::SQRT_2;
+        if zoom {
+            for k in 0..24 {
+                let a = k as f32 * std::f32::consts::TAU / 24.0;
+                let dir = egui::vec2(a.cos(), a.sin());
+                painter.line_segment([at + dir * 6.0, at + dir * reach], faint);
+            }
+        } else {
+            for k in 1..=12 {
+                painter.circle_stroke(at, k as f32 * reach / 12.0, faint);
+            }
+        }
+        painter.circle(at, 3.5, if resp.has_focus() { t.accent } else { t.panel }, Stroke::new(1.5, t.text));
+        let border = if resp.has_focus() { t.accent } else { t.input_border };
+        painter.rect_stroke(rect, 2.0, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+        // The same position typed in percent.
+        ui.vertical(|ui| {
+            egui::Grid::new("blur-center-fields").num_columns(2).spacing([8.0, 8.0]).show(ui, |ui| {
+                for (i, label) in ["Horizontal", "Vertical"].into_iter().enumerate() {
+                    let row = ui.label(egui::RichText::new(crate::i18n::colon(tl!(label))).color(t.text));
+                    ui.label_inputs_by(row.id, |ui| {
+                        if let Some(x) =
+                            widgets::range_field_named(ui, ("blur-center", i), None, c[i] * 100.0, 0.0..=100.0, &form::unit_suffix("%"), 1, 72.0)
+                        {
+                            c[i] = center_round((x / 100.0).clamp(0.0, 1.0));
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+        });
+    });
+    // A saved center outside the bounds is drawn at the nearest edge, and the fields hold that
+    // edge too, so OK sends the center the box shows.
+    for (key, v) in [(kx, c[0]), (ky, c[1])] {
+        if d.fields.get(key).and_then(Value::as_f64) != Some(v) {
+            d.fields.insert(key.into(), json!(v));
+        }
+    }
+}
+
 /// The Glass effect (Effect › Distort › Glass…).
 const GLASS: &str = "distort.glass";
+/// The Texturizer effect (Effect › Texture › Texturizer…).
+const TEXTURIZER: &str = "texture.texturizer";
+/// The Rough Pastels effect (Effect › Artistic › Rough Pastels…).
+const ROUGH_PASTELS: &str = "artistic.roughPastels";
 
-/// Glass's dialog: its parameters, the Texture menu ending with Loaded Texture once a texture is
-/// loaded, and Load Texture… with the loaded texture's size. Returns whether the values differ from
-/// those last previewed.
-fn glass_fields(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+/// Does effect `id` have Load Texture… in its dialog (Glass, Texturizer, Rough Pastels)?
+fn loads_texture(id: &str) -> bool {
+    matches!(id, GLASS | TEXTURIZER | ROUGH_PASTELS)
+}
+
+/// Glass, Texturizer and Rough Pastels: parameters, the Texture menu ending with Loaded Texture
+/// once a texture is loaded, and Load Texture… with the loaded texture's size. Returns whether the
+/// values differ from those last previewed.
+fn glass_fields(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog, id: &str) -> bool {
     use vectorz_effects::pixel::{TEXTURE_IMAGE, texture};
     // The stored texture is shown as its size, not as a text field.
     let stored = d.fields.remove(TEXTURE_IMAGE);
     let size = stored.as_ref().and_then(Value::as_str).and_then(texture).map(|t| t.size());
-    let menu = glass_textures(size.is_some());
-    let doc = vectorz_effects::effect_info(GLASS).map(|e| e.params).unwrap_or_default();
+    let menu = if id == GLASS { glass_textures(size.is_some()) } else { texturizer_textures(size.is_some()) };
+    let doc = vectorz_effects::effect_info(id).map(|e| e.params).unwrap_or_default();
     let unit = app.session.general_unit();
-    let pick = |k: &str| if k == "texture" { Some(menu) } else { choices(GLASS, k) };
-    form::param_fields(ui, d, &|k| vectorz_effects::is_length(GLASS, k, false), &pick, &|k| doc_rank(doc, k), unit);
+    let pick = |k: &str| if k == "texture" { Some(menu) } else { choices(id, k) };
+    form::param_fields(ui, d, &|k| vectorz_effects::is_length(id, k, false), &pick, &|k| doc_rank(doc, k), unit);
     if let Some(v) = stored {
         d.fields.insert(TEXTURE_IMAGE.into(), v);
     }
@@ -237,11 +460,18 @@ fn glass_fields(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool
             widgets::dim_label(ui, &format!("{w} × {h} px"));
         }
     });
-    if load
-        && let Err(e) = crate::picks::in_dialog(app, d, load_texture)
-        && e != "cancelled"
-    {
-        app.status(e);
+    if load {
+        // The Effect Gallery's Settings draw in a dialog of their own: its answer goes to the gallery.
+        let loaded = if d.fields.contains_key(super::effect_gallery::SETTINGS) {
+            super::effect_gallery::load_texture(app, d)
+        } else {
+            crate::picks::in_dialog(app, d, load_texture)
+        };
+        if let Err(e) = loaded
+            && e != "cancelled"
+        {
+            app.status(e);
+        }
     }
     values_changed(d)
 }
@@ -252,11 +482,18 @@ fn glass_textures(loaded: bool) -> form::Choices {
     if loaded { &GLASS_TEXTURES_LOADED } else { &GLASS_TEXTURES }
 }
 
+/// Texturizer's and Rough Pastels' Texture menu, ending with Loaded Texture once a texture is
+/// `loaded`.
+fn texturizer_textures(loaded: bool) -> form::Choices {
+    use vectorz_effects::pixel::{TEXTURES, TEXTURES_LOADED};
+    if loaded { &TEXTURES_LOADED } else { &TEXTURES }
+}
+
 /// Glass's Load Texture…: an image file the user picks, read into `textureImage` as Glass stores
 /// it and picked in the Texture menu.
-fn load_texture(app: &mut VectorzApp, d: &mut Dialog) -> Result<(), String> {
+pub(super) fn load_texture(app: &mut VectorzApp, d: &mut Dialog) -> Result<(), String> {
     use vectorz_engine::cmd::fileio;
-    let filters = fileio::FORMATS.iter().filter(|f| f.read && f.raster).map(|f| (f.label, f.extensions)).collect();
+    let filters = crate::FilePick::filters(fileio::FORMATS.iter().filter(|f| f.read && f.raster).map(|f| (f.label, fileio::read_extensions(f))));
     let path = crate::picks::open(app, &crate::FilePick { filters, ..Default::default() }).ok_or("cancelled")?;
     // The button is off where files can't be read.
     let Some(read) = app.services.read.as_ref() else { return Ok(()) };
@@ -276,31 +513,52 @@ fn choices(effect: &str, key: &str) -> Option<form::Choices> {
         ("brushStrokes.sprayedStrokes", "strokeDirection") => Some(&vectorz_effects::pixel::STROKE_DIRECTIONS),
         ("distort.glass", "texture") => Some(&vectorz_effects::pixel::GLASS_TEXTURES),
         ("pixelate.mezzotint", "type") => Some(&vectorz_effects::pixel::MEZZOTINT_TYPES),
+        ("artistic.paintDaubs", "brushType") => Some(&vectorz_effects::pixel::PAINT_DAUB_BRUSH_TYPES),
+        ("sketch.graphicPen", "strokeDirection") => Some(&vectorz_effects::pixel::STROKE_DIRECTIONS),
         ("sketch.halftonePattern", "patternType") => Some(&vectorz_effects::pixel::HALFTONE_TYPES),
+        ("sketch.plaster", "lightDirection") => Some(&vectorz_effects::pixel::LIGHT_DIRECTIONS),
         ("texture.grain", "grainType") => Some(&vectorz_effects::pixel::GRAIN_TYPES),
-        ("texture.texturizer", "texture") => Some(&vectorz_effects::pixel::TEXTURES),
-        ("texture.texturizer", "lightDirection") => Some(&vectorz_effects::pixel::LIGHT_DIRECTIONS),
+        ("texture.texturizer" | "artistic.underpainting" | "artistic.roughPastels" | "sketch.conteCrayon", "texture") => {
+            Some(&vectorz_effects::pixel::TEXTURES)
+        }
+        ("sketch.basRelief" | "texture.texturizer" | "artistic.underpainting" | "artistic.roughPastels" | "sketch.conteCrayon", "lightDirection") => {
+            Some(&vectorz_effects::pixel::LIGHT_DIRECTIONS)
+        }
         ("video.deinterlace", "eliminate") => Some(&[("Odd Fields", "odd"), ("Even Fields", "even")]),
         ("video.deinterlace", "create") => Some(&[("Duplication", "duplication"), ("Interpolation", "interpolation")]),
         ("stylize.innerGlow", "source") => Some(&[("Center", "center"), ("Edge", "edge")]),
         ("stylize.dropShadow", "shade") => Some(SHADES),
         ("path.offsetPath", "joins") => Some(&[("Miter", "miter"), ("Round", "round"), ("Bevel", "bevel")]),
         ("distort.roughen" | "distort.zigZag", "points") => Some(&[("Smooth", "smooth"), ("Corner", "corner")]),
-        _ => None,
+        _ => crate::addons::pathtools::effect_choices(effect, key),
     }
 }
 
 /// The parameters whose dialogs list their values in their own bodies, as (label, value), each
 /// label as that dialog passes it to its dropdown or radio buttons, which translate it into the UI
-/// language: Revolve's edge, Extrude & Bevel's bevel (Rounded translated in the "3d" context
-/// first), every Warp style's orientation, Rasterize's Color Model (its `document` value labeled
+/// language: the edge of both Revolves, the bevel of both Extrude & Bevels (Rounded translated in
+/// the "3d" context first), the surface and shading color of the classic 3D effects, every Warp style's
+/// orientation, Rasterize's Color Model (its `document` value labeled
 /// CMYK when `cmyk`, for a document in CMYK, and RGB otherwise), Background and Anti-aliasing, and
 /// the channel of Levels and Curves.
 pub(super) fn own_choices(effect: &str, key: &str, cmyk: bool) -> Option<Vec<(&'static str, &'static str)>> {
     let c3 = |s: &'static str| crate::i18n::tr_ctx(crate::i18n::current(), "3d", s);
     Some(match (effect, key) {
-        (vectorz_effects::REVOLVE, "edge") => vec![(tl!("Left"), "left"), (tl!("Right"), "right")],
-        (vectorz_effects::EXTRUDE, "bevel") => vec![
+        (vectorz_effects::REVOLVE | vectorz_effects::CLASSIC_REVOLVE, "edge") => vec![(tl!("Left"), "left"), (tl!("Right"), "right")],
+        (
+            vectorz_effects::REVOLVE | vectorz_effects::EXTRUDE | vectorz_effects::INFLATE | vectorz_effects::ROTATE,
+            "shadowPosition",
+        ) => {
+            vec![(tl!("Behind Object"), "behind"), (tl!("Below Object"), "below")]
+        }
+        (vectorz_effects::CLASSIC_EXTRUDE | vectorz_effects::CLASSIC_REVOLVE, "surface") => {
+            vec![(tl!("Wireframe"), "wireframe"), (tl!("No Shading"), "none"), (tl!("Diffuse"), "diffuse"), (tl!("Plastic"), "plastic")]
+        }
+        (vectorz_effects::CLASSIC_ROTATE, "surface") => vec![(tl!("No Shading"), "none"), (tl!("Diffuse"), "diffuse")],
+        (vectorz_effects::CLASSIC_EXTRUDE | vectorz_effects::CLASSIC_REVOLVE | vectorz_effects::CLASSIC_ROTATE, "shadingColor") => {
+            vec![(tl!("Black"), "black"), (tl!("Custom"), "custom"), (tl!("None"), "none"), (tl!("Black Overprint"), "blackOverprint")]
+        }
+        (vectorz_effects::EXTRUDE | vectorz_effects::CLASSIC_EXTRUDE, "bevel") => vec![
             (tl!("None"), "none"),
             (tl!("Classic"), "classic"),
             (c3("Rounded"), "rounded"),
@@ -321,13 +579,13 @@ pub(super) fn own_choices(effect: &str, key: &str, cmyk: bool) -> Option<Vec<(&'
 
 /// The values that parameter `key` of applied effect `effect` picks from, as its dialog lists
 /// them, as (label, value): our own effects' labels in the UI language, a plug-in's choices as the
-/// plug-in names them. Glass's Texture menu ends with Loaded Texture when the effect's values
-/// `params` hold a loaded texture, and the lists of [`own_choices`] are translated as their
-/// dialogs translate them (`cmyk`: the document is in CMYK). `None` for a parameter that is not one
-/// of these lists.
+/// plug-in names them. The Texture menu of Glass, Texturizer and Rough Pastels ends with Loaded
+/// Texture when the effect's values `params` hold a loaded texture, and the lists of
+/// [`own_choices`] are translated as their dialogs translate them (`cmyk`: the document is in
+/// CMYK). `None` for a parameter that is not one of these lists.
 pub(crate) fn shown_choices(effect: &str, key: &str, params: &Map<String, Value>, cmyk: bool) -> Option<Vec<(String, String)>> {
     if let Some(plugin) = vectorz_plugins::effect::installed(effect) {
-        return plugin.manifest().params.iter().find(|(k, _)| k == key).and_then(|(_, spec)| match spec {
+        return plugin.manifest().param(key).and_then(|p| match &p.spec {
             vectorz_plugins::ParamSpec::Choice { options, .. } => Some(options.iter().map(|o| (o.clone(), o.clone())).collect()),
             _ => None,
         });
@@ -335,9 +593,10 @@ pub(crate) fn shown_choices(effect: &str, key: &str, params: &Map<String, Value>
     if let Some(own) = own_choices(effect, key, cmyk) {
         return Some(own.into_iter().map(|(label, value)| (tl!(label).to_string(), value.to_string())).collect());
     }
-    let options = if effect == GLASS && key == "texture" {
+    let options = if loads_texture(effect) && key == "texture" {
         use vectorz_effects::pixel::{TEXTURE_IMAGE, texture};
-        glass_textures(params.get(TEXTURE_IMAGE).and_then(Value::as_str).and_then(texture).is_some())
+        let loaded = params.get(TEXTURE_IMAGE).and_then(Value::as_str).and_then(texture).is_some();
+        if effect == GLASS { glass_textures(loaded) } else { texturizer_textures(loaded) }
     } else {
         choices(effect, key)?
     };
@@ -414,13 +673,20 @@ fn adjust_fields(ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     if d.fields.contains_key("points") {
         ui.horizontal(|ui| {
             ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
-            curve_graph(ui, d);
+            let mut pts = vectorz_effects::curve_points(d.fields.get("points"));
+            if curve_graph(ui, &mut pts, 255.0) {
+                d.fields.insert("points".into(), json!(points_text(&pts, 255.0)));
+            }
         });
     }
     for (key, label, width) in [("points", tl!("Points"), 220.0), ("color", tl!("Color"), 120.0)] {
         if d.fields.contains_key(key) {
             widgets::label_row(ui, label, LABEL_W, |ui| {
-                form::text(ui, d, key, width);
+                if key == "color" {
+                    form::color_text(ui, d, key, width);
+                } else {
+                    form::text(ui, d, key, width);
+                }
             });
         }
     }
@@ -450,19 +716,70 @@ fn values_changed(d: &mut Dialog) -> bool {
 /// The Transform effect (Effect › Distort & Transform › Transform…).
 const TRANSFORM: &str = "distort.transform";
 
+/// Scribble (Effect › Stylize › Scribble…).
+const SCRIBBLE: &str = "stylize.scribble";
+
+/// Dialog-only: which Settings preset is selected (`custom` when the values match none).
+const SCRIBBLE_SETTING: &str = "__scribbleSetting";
+
+/// Scribble's dialog: a Settings preset menu, then its parameters. Returns whether the values differ
+/// from those last previewed.
+fn scribble_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit) -> bool {
+    if !d.fields.contains_key(SCRIBBLE_SETTING) {
+        let id = vectorz_effects::scribble_setting_id(&form::params(d)).unwrap_or("custom");
+        d.fields.insert(SCRIBBLE_SETTING.into(), json!(id));
+    }
+    let presets = vectorz_effects::scribble_settings();
+    let cur = d.fields.get(SCRIBBLE_SETTING).and_then(Value::as_str).unwrap_or("default");
+    let labels: Vec<&str> = presets.iter().map(|p| p.label).chain(["Custom"]).collect();
+    let ids: Vec<&str> = presets.iter().map(|p| p.id).chain(["custom"]).collect();
+    let current = if cur == "custom" { "Custom" } else { presets.iter().find(|p| p.id == cur).map(|p| p.label).unwrap_or(labels[0]) };
+    widgets::subheader(ui, tl!("Settings"));
+    let mut settings_changed = false;
+    ui.horizontal(|ui| {
+        if let Some(i) = widgets::dropdown(ui, "fx-scribble-setting", current, &labels, 160.0) {
+            let picked = ids[i];
+            d.fields.insert(SCRIBBLE_SETTING.into(), json!(picked));
+            if picked != "custom"
+                && let Some(preset) = presets.iter().find(|p| p.id == picked)
+                && let Some(m) = preset.params.as_object()
+            {
+                for (k, v) in m {
+                    d.fields.insert(k.clone(), v.clone());
+                }
+            }
+            settings_changed = true;
+        }
+    });
+    ui.add_space(4.0);
+    let doc = vectorz_effects::effect_info(SCRIBBLE).map(|e| e.params).unwrap_or_default();
+    let fields_changed =
+        form::param_fields(ui, d, &|k| vectorz_effects::is_length(SCRIBBLE, k, false), &|k| choices(SCRIBBLE, k), &|k| doc_rank(doc, k), unit);
+    if let Value::Object(m) = vectorz_effects::upgrade_params(SCRIBBLE, &Value::Object(d.fields.clone())) {
+        d.fields = m;
+    }
+    let id = vectorz_effects::scribble_setting_id(&form::params(d)).unwrap_or("custom");
+    d.fields.insert(SCRIBBLE_SETTING.into(), json!(id));
+    settings_changed || fields_changed
+}
+
 /// The Transform effect's dialog: Transform Each's Scale and Move sliders and Rotate dial, then
-/// Copies, the reflections, the reference point and Random. Returns whether the values differ from
-/// those last previewed.
+/// the options Transform Objects, Transform Patterns and Scale Strokes & Effects (#885), Copies,
+/// the reflections, the reference point and Random. Returns whether the values differ from those
+/// last previewed.
 fn transform_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit) -> bool {
     ui.horizontal_top(|ui| {
-        ui.vertical(|ui| transform_each::sections(ui, d, unit));
+        ui.vertical(|ui| transform_each::sections(ui, d, unit, true));
         ui.add_space(16.0);
         ui.vertical(|ui| {
             widgets::subheader(ui, tl!("Options"));
             ui.add_space(4.0);
+            form::check(ui, d, "objects", tl!("Transform Objects"));
+            form::check(ui, d, "patterns", tl!("Transform Patterns"));
+            form::check(ui, d, "strokes", tl!("Scale Strokes & Effects"));
             ui.horizontal(|ui| {
                 widgets::dim_label(ui, tl!("Copies:"));
-                if let Some(n) = widgets::range_field(ui, "fx-copies", d.f64("copies", 0.0), 0.0..=1000.0, "", 0, 50.0) {
+                if let Some(n) = widgets::range_field_live(ui, "fx-copies", d.f64("copies", 0.0), 0.0..=1000.0, "", 0, 50.0) {
                     d.fields.insert("copies".into(), json!(n));
                 }
             });
@@ -475,54 +792,108 @@ fn transform_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit) 
 /// The Zig Zag effect (Effect › Distort & Transform › Zig Zag…).
 const ZIG_ZAG: &str = "distort.zigZag";
 
-/// Zig Zag's dialog (#1133): Size and Ridges per segment as sliders with their fields, Relative or
-/// Absolute and the Points as radio buttons. Returns whether the values differ from those last
-/// previewed.
-fn zig_zag_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit) -> bool {
-    const LABEL_W: f32 = 124.0;
-    const FIELD_W: f32 = 70.0;
+/// The Roughen effect (Effect › Distort & Transform › Roughen…).
+const ROUGHEN: &str = "distort.roughen";
+
+/// The Pucker & Bloat effect (Effect › Distort & Transform › Pucker & Bloat…).
+const PUCKER_BLOAT: &str = "distort.puckerBloat";
+
+/// The second slider of [`size_fields`]: Zig Zag's Ridges per segment, Roughen's Detail (per inch),
+/// as (key, label, default, suffix).
+fn second_slider(effect: &str) -> (&'static str, &'static str, f64, &'static str) {
+    if effect == ROUGHEN { ("detail", "Detail:", 10.0, "/in") } else { ("ridges", "Ridges per segment:", 4.0, "") }
+}
+
+/// Zig Zag's and Roughen's dialog (#1133, #4488): Size and Ridges per segment (Roughen: Detail) as
+/// sliders with their fields, Relative or Absolute and the Points as radio buttons. Returns
+/// whether the values differ from those last previewed.
+/// The label column and field width of [`relative_rows`] and the sliders under them.
+const DISTORT_LABEL_W: f32 = 124.0;
+const DISTORT_FIELD_W: f32 = 70.0;
+
+/// A slider with its field for each of `rows` (key, label, default), each a share of the object's
+/// size with Relative or a distance with Absolute, then the Relative and Absolute radio buttons.
+fn relative_rows(ui: &mut egui::Ui, d: &mut Dialog, rows: &[(&str, &str, f64)], unit: vectorz_doc::Unit) {
     let rail = Tokens::get(ui.ctx()).input_border;
     let track = move |_| rail;
     let relative = d.bool("relative");
-    widgets::subheader(ui, tl!("Options"));
-    // Size is a share of the object's size (Relative) or a distance (Absolute).
-    widgets::label_row(ui, tl!("Size:"), LABEL_W, |ui| {
-        let shown = if relative {
-            Some(widgets::SliderValue::field(d.f64("size", 10.0).clamp(0.0, 100.0), 0.0..=100.0, "%", 0))
-        } else {
-            form::length_value(d, "size", unit, 0.0..=100.0)
-        };
-        form::slider_rail_valued(ui, d, "size", tl!("Size:"), 0.0..=100.0, shown, &track);
-        if !relative {
-            form::length(ui, d, "size", unit, FIELD_W);
-        } else if let Some(n) = widgets::range_field(ui, ("zz", "size"), d.f64("size", 10.0), 0.0..=100.0, "%", 0, FIELD_W) {
-            d.fields.insert("size".into(), json!(n));
-        }
-    });
+    for &(key, label, default) in rows {
+        widgets::label_row(ui, tl!(label), DISTORT_LABEL_W, |ui| {
+            let shown = if relative {
+                Some(widgets::SliderValue::field(d.f64(key, default).clamp(0.0, 100.0), 0.0..=100.0, "%", 0))
+            } else {
+                form::length_value(d, key, unit, 0.0..=100.0)
+            };
+            form::slider_rail_valued(ui, d, key, tl!(label), 0.0..=100.0, shown, &track);
+            if !relative {
+                form::length(ui, d, key, unit, DISTORT_FIELD_W);
+            } else if let Some(n) = widgets::range_field(ui, ("zz", key), d.f64(key, default), 0.0..=100.0, "%", 0, DISTORT_FIELD_W) {
+                d.fields.insert(key.into(), json!(n));
+            }
+        });
+    }
     ui.horizontal(|ui| {
-        ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
+        ui.add_space(DISTORT_LABEL_W + ui.spacing().item_spacing.x);
         for (label, on) in [(tl!("Relative"), true), (tl!("Absolute"), false)] {
             if widgets::radio(ui, label, relative == on, true) {
                 d.fields.insert("relative".into(), json!(on));
             }
         }
     });
-    widgets::label_row(ui, tl!("Ridges per segment:"), LABEL_W, |ui| {
-        form::slider_rail_named(ui, d, "ridges", tl!("Ridges per segment:"), 0.0..=100.0, &track);
-        if let Some(n) = widgets::range_field(ui, ("zz", "ridges"), d.f64("ridges", 4.0), 0.0..=100.0, "", 0, FIELD_W) {
-            d.fields.insert("ridges".into(), json!(n));
+}
+
+fn size_fields(ui: &mut egui::Ui, d: &mut Dialog, effect: &str, unit: vectorz_doc::Unit) -> bool {
+    const LABEL_W: f32 = DISTORT_LABEL_W;
+    const FIELD_W: f32 = DISTORT_FIELD_W;
+    let rail = Tokens::get(ui.ctx()).input_border;
+    let track = move |_| rail;
+    let size = if effect == ROUGHEN { 5.0 } else { 10.0 };
+    widgets::subheader(ui, tl!("Options"));
+    // Size is a share of the object's size (Relative) or a distance (Absolute).
+    relative_rows(ui, d, &[("size", "Size:", size)], unit);
+    let (key, label, default, suffix) = second_slider(effect);
+    widgets::label_row(ui, tl!(label), LABEL_W, |ui| {
+        form::slider_rail_named(ui, d, key, tl!(label), 0.0..=100.0, &track);
+        if let Some(n) = widgets::range_field(ui, ("zz", key), d.f64(key, default), 0.0..=100.0, suffix, 0, FIELD_W) {
+            d.fields.insert(key.into(), json!(n));
         }
     });
     ui.add_space(4.0);
     widgets::subheader(ui, crate::i18n::tr_ctx(crate::i18n::current(), "effect", "Points"));
     let points = d.str("points");
     ui.horizontal(|ui| {
-        for (label, value) in choices(ZIG_ZAG, "points").unwrap_or_default() {
+        for (label, value) in choices(effect, "points").unwrap_or_default() {
             if widgets::radio(ui, crate::i18n::tr_ctx(crate::i18n::current(), "effect", label), points == *value, true) {
                 d.fields.insert("points".into(), json!(value));
             }
         }
     });
+    values_changed(d)
+}
+
+/// The Tweak effect (Effect › Distort & Transform › Tweak…).
+const TWEAK: &str = "distort.tweak";
+
+/// Tweak's dialog (#4488): Horizontal and Vertical as sliders with their fields (a share of the
+/// object's size with Relative, a distance with Absolute), then which points it moves. Returns
+/// whether the values differ from those last previewed.
+fn tweak_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit) -> bool {
+    widgets::subheader(ui, tl!("Amount"));
+    relative_rows(ui, d, &[("h", "Horizontal:", 10.0), ("v", "Vertical:", 10.0)], unit);
+    ui.add_space(4.0);
+    widgets::subheader(ui, tl!("Modify"));
+    form::check(ui, d, "anchors", tl!("Anchor Points"));
+    form::check(ui, d, "in", tl!("\"In\" Control Points"));
+    form::check(ui, d, "out", tl!("\"Out\" Control Points"));
+    values_changed(d)
+}
+
+/// Pucker & Bloat's dialog (#4488): its amount as a slider from Pucker (−200 %) to Bloat (200 %)
+/// with its field. Returns whether the value differs from the one last previewed.
+fn pucker_bloat_fields(ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+    let rail = Tokens::get(ui.ctx()).input_border;
+    form::slider(ui, d, "amount", tl!("Amount:"), -200.0..=200.0, "%", &move |_| rail);
+    form::slider_ends(ui, form::SLIDER_LABEL, (tl!("Pucker"), tl!("Bloat")));
     values_changed(d)
 }
 
@@ -543,45 +914,53 @@ fn drop_shadow_fields(ui: &mut egui::Ui, d: &mut Dialog, unit: vectorz_doc::Unit
     d.fields.extend(own);
     let darkness = d.str("shade").eq_ignore_ascii_case("darkness");
     ui.add_space(4.0);
+    // A double-click on Color's swatch asks for the Color Picker over this dialog (#5364).
+    let mut pick = None;
     egui::Grid::new("fx-shade").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         if widgets::radio(ui, tl!("Color"), !darkness, true) {
             d.fields.insert("shade".into(), json!("color"));
         }
-        ui.add_enabled_ui(!darkness, |ui| match d.fields.get("color") {
-            Some(Value::String(_)) | None => {
-                form::text(ui, d, "color", 128.0);
-            }
-            Some(other) => {
-                widgets::dim_label(ui, &other.to_string());
-            }
+        ui.add_enabled_ui(!darkness, |ui| {
+            ui.horizontal(|ui| {
+                form::color_text(ui, d, "color", 128.0);
+                if let Some(c) = d.fields.get("color").and_then(vectorz_engine::cmd::color_value)
+                    && form::colour_swatch(ui, "color", c)
+                {
+                    pick = Some(c);
+                }
+            });
         });
         ui.end_row();
         if widgets::radio(ui, tl!("Darkness"), darkness, true) {
             d.fields.insert("shade".into(), json!("darkness"));
         }
         ui.add_enabled_ui(darkness, |ui| {
-            if let Some(v) = widgets::range_field(ui, "fx-darkness", d.f64("darkness", 100.0), 0.0..=100.0, "%", 0, 70.0) {
+            if let Some(v) = widgets::spin_range(ui, "fx-darkness", Some(d.f64("darkness", 100.0)), 0.0..=100.0, "%", 0, 86.0, 1.0) {
                 d.fields.insert("darkness".into(), json!(v));
             }
         });
         ui.end_row();
     });
-    values_changed(d)
+    let changed = values_changed(d);
+    if let Some(c) = pick {
+        *d = super::color_picker::over_effect(d, "color", c);
+    }
+    changed
 }
 
-/// Curves' graph of its `points` (input across, output up, 0..255): drag a point to move it
-/// between its neighbours, press on the graph away from the points to add one there, drag one
-/// off the graph to remove it (two always stay).
-fn curve_graph(ui: &mut egui::Ui, d: &mut Dialog) {
+/// A curve's graph of its points `pts` (0..1 each; input across, output up), as Curves and
+/// Duotone's tones edit them on a scale of 0..`max`: drag a point to move it between its
+/// neighbours, press on the graph away from the points to add one there, drag one off the graph
+/// to remove it (two always stay). Returns whether the points changed.
+pub(super) fn curve_graph(ui: &mut egui::Ui, pts: &mut Vec<(f32, f32)>, max: f32) -> bool {
     const SIZE: f32 = 200.0;
     /// How near (screen points) a press must be to take a point.
     const GRAB: f32 = 8.0;
     let t = Tokens::get(ui.ctx());
-    let mut pts = vectorz_effects::curve_points(d.fields.get("points"));
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(SIZE, SIZE), egui::Sense::click_and_drag());
     let screen = |(x, y): (f32, f32)| egui::pos2(rect.left() + x * SIZE, rect.bottom() - y * SIZE);
     let unit = |p: egui::Pos2| (((p.x - rect.left()) / SIZE).clamp(0.0, 1.0), ((rect.bottom() - p.y) / SIZE).clamp(0.0, 1.0));
-    let held = ui.id().with("curve-point");
+    let held = ui.scope_id().with("curve-point");
     let mut grabbed: Option<usize> = ui.data(|m| m.get_temp(held)).flatten();
     let mut changed = false;
     if let Some(p) = resp.interact_pointer_pos()
@@ -607,7 +986,7 @@ fn curve_graph(ui: &mut egui::Ui, d: &mut Dialog) {
             pts.remove(i.min(pts.len() - 1));
             grabbed = None;
         } else {
-            let step = 1.0 / 255.0;
+            let step = 1.0 / max;
             let lo = if i == 0 { 0.0 } else { pts.get(i - 1).map_or(0.0, |a| a.0 + step) };
             let hi = pts.get(i + 1).map_or(1.0, |a| a.0 - step);
             let (x, y) = unit(p);
@@ -631,17 +1010,19 @@ fn curve_graph(ui: &mut egui::Ui, d: &mut Dialog) {
         painter.line_segment([screen((0.0, f)), screen((1.0, f))], faint);
     }
     painter.line_segment([screen((0.0, 0.0)), screen((1.0, 1.0))], faint);
-    let curve: Vec<egui::Pos2> = (0..=64).map(|k| k as f32 / 64.0).map(|x| screen((x, vectorz_effects::curve_at(&pts, x)))).collect();
+    let curve: Vec<egui::Pos2> = (0..=64).map(|k| k as f32 / 64.0).map(|x| screen((x, vectorz_effects::curve_at(pts.as_slice(), x)))).collect();
     painter.add(egui::Shape::line(curve, egui::Stroke::new(1.5, t.text)));
     for (i, q) in pts.iter().enumerate() {
         let fill = if Some(i) == grabbed { t.accent } else { t.panel };
         painter.circle(screen(*q), 4.0, fill, egui::Stroke::new(1.5, t.text));
     }
     painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
-    if changed {
-        let text: Vec<String> = pts.iter().map(|(x, y)| format!("{},{}", (x * 255.0).round(), (y * 255.0).round())).collect();
-        d.fields.insert("points".into(), json!(text.join(" ")));
-    }
+    changed
+}
+
+/// Curve points `pts` (0..1) as the `"x,y x,y …"` text of a curve on a scale of 0..`max`.
+pub(super) fn points_text(pts: &[(f32, f32)], max: f32) -> String {
+    pts.iter().map(|(x, y)| format!("{},{}", (x * max).round(), (y * max).round())).collect::<Vec<_>>().join(" ")
 }
 
 /// What OK runs: `effect.setParams` on the edited effect (`__index`), else `effect.apply` of the
@@ -650,12 +1031,25 @@ fn command(d: &Dialog) -> (&'static str, Value) {
     let params = form::params(d);
     let item = d.fields.get("__item").cloned();
     if let Some(index) = d.fields.get("__index") {
-        let mut p = json!({"index": index, "item": item.unwrap_or(Value::Null), "params": params});
+        let mut p = d.fields.get("__editTarget").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({}));
+        p["index"] = index.clone();
+        p["item"] = item.unwrap_or(Value::Null);
+        p["params"] = params;
         let id = d.str("__effect");
+        // Each target keeps the map its own Warp draws with: the dialog's `version` is the first
+        // target's.
+        if super::warp_effect::is_warp(&id)
+            && let Some(Value::Object(m)) = p.get_mut("params")
+        {
+            m.remove("version");
+        }
         // The displayed style comes from the first target. Preserve other targets' Warp IDs
         // unless the user deliberately chooses Style, including after a preview rollback.
         if super::warp_effect::is_warp(&id) && d.bool("__warp_style_changed") {
             p["warpStyle"] = json!(id.strip_prefix("warp."));
+        }
+        if d.bool("__aligned") {
+            p["aligned"] = json!(true);
         }
         return ("effect.setParams", p);
     }
@@ -673,7 +1067,11 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
     let r = form::commit_preview(app, cmd, p.clone())?;
     // Last Effect repeats applied effects, not edits.
     if cmd == "effect.apply" {
-        app.last_effect = Some((d.str("__effect"), p["params"].clone()));
+        let id = d.str("__effect");
+        app.last_effect = Some((id.clone(), p["params"].clone()));
+        if super::warp_effect::is_warp(id.as_str()) {
+            app.last_warp = Some(super::warp_effect::remembered_params(d));
+        }
     }
     Ok(r)
 }
@@ -681,6 +1079,27 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An applied effect's dialog opened on a shared row of a mixed selection (`aligned`) edits
+    /// each object's own copy on OK; opened otherwise it edits the index as given.
+    #[test]
+    fn a_shared_rows_dialog_edits_each_objects_copy() {
+        let dialog = |aligned: bool| {
+            let mut fields = Map::new();
+            fields.insert("__effect".into(), json!("stylize.feather"));
+            fields.insert("__index".into(), json!(0));
+            fields.insert("__item".into(), Value::Null);
+            fields.insert("radius".into(), json!(8));
+            if aligned {
+                fields.insert("__aligned".into(), json!(true));
+            }
+            Dialog { kind: "effect".into(), fields }
+        };
+        let (cmd, p) = command(&dialog(true));
+        assert_eq!((cmd, &p["aligned"], &p["params"]["radius"]), ("effect.setParams", &json!(true), &json!(8)));
+        assert!(p["params"].get("__aligned").is_none());
+        assert!(command(&dialog(false)).1.get("aligned").is_none());
+    }
 
     #[test]
     fn fields_that_pick_a_value_are_dropdowns_of_its_values() {
@@ -691,6 +1110,7 @@ mod tests {
             ("distort.roughen", "points"),
             ("stylize.innerGlow", "source"),
             (DROP_SHADOW, "shade"),
+            ("artistic.paintDaubs", "brushType"),
         ] {
             let doc = vectorz_effects::effect_info(effect).unwrap().params;
             let listed = doc.split(&format!("{key}: ")).nth(1).unwrap().split([',', '}', ' ']).next().unwrap().to_string();
@@ -706,6 +1126,14 @@ mod tests {
         for (effect, key) in [
             (vectorz_effects::REVOLVE, "edge"),
             (vectorz_effects::EXTRUDE, "bevel"),
+            (vectorz_effects::CLASSIC_EXTRUDE, "bevel"),
+            (vectorz_effects::CLASSIC_EXTRUDE, "surface"),
+            (vectorz_effects::CLASSIC_EXTRUDE, "shadingColor"),
+            (vectorz_effects::CLASSIC_REVOLVE, "edge"),
+            (vectorz_effects::CLASSIC_REVOLVE, "surface"),
+            (vectorz_effects::CLASSIC_REVOLVE, "shadingColor"),
+            (vectorz_effects::CLASSIC_ROTATE, "surface"),
+            (vectorz_effects::CLASSIC_ROTATE, "shadingColor"),
             ("warp.arc", "orientation"),
             ("warp.twist", "orientation"),
             (vectorz_effects::RASTERIZE, "background"),
@@ -758,5 +1186,368 @@ mod tests {
         let params = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0].params;
         assert_eq!((&params["texture"], &params["textureImage"]), (&json!("loaded"), &json!(stored)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Texturizer's Load Texture… matches Glass: pick, Loaded Texture in the menu, OK applies.
+    #[test]
+    fn texturizer_load_texture_reads_the_picked_image_into_the_effect() {
+        let dir = std::env::temp_dir().join(format!("vectorz-texturizer-dialog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("texture.png");
+        image::RgbaImage::from_fn(6, 4, |x, y| image::Rgba([(x * 40) as u8, (y * 60) as u8, 90, 255])).save(&path).unwrap();
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        let picked = path.to_string_lossy().into_owned();
+        app.services.pick_open = Some(Box::new(move |_: &crate::FilePick| Some(picked.clone())));
+        app.services.read = Some(Box::new(|p: &str| std::fs::read(p).map_err(|e| e.to_string())));
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("effect.dialog", json!({"effect": TEXTURIZER})).unwrap();
+        let paint = |app: &mut VectorzApp| crate::tests_labels::painted_text(app, |app, ui| super::super::show(app, ui.ctx()));
+        let text = paint(&mut app);
+        assert!(text.lines().any(|l| l == "Load Texture…") && text.lines().any(|l| l == "Canvas"), "{text}");
+        let mut d = app.ui.dialog.take().unwrap();
+        load_texture(&mut app, &mut d).unwrap();
+        let stored = d.str(vectorz_effects::pixel::TEXTURE_IMAGE);
+        assert_eq!((d.str("texture"), vectorz_effects::pixel::texture(&stored).map(|t| t.size())), ("loaded".to_string(), Some((6, 4))));
+        app.ui.dialog = Some(d);
+        super::super::confirm(&mut app).unwrap();
+        let st = app.session.doc().unwrap();
+        let params = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0].params;
+        assert_eq!((&params["texture"], &params["textureImage"]), (&json!("loaded"), &json!(stored)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Rough Pastels' Texture and Light Direction are menus, and Load Texture… matches Glass: pick,
+    /// Loaded Texture in the menu with the texture's size, OK applies, and the Appearance panel's
+    /// Texture menu lists Loaded Texture too.
+    #[test]
+    fn rough_pastels_load_texture_reads_the_picked_image_into_the_effect() {
+        let dir = std::env::temp_dir().join(format!("vectorz-rough-pastels-dialog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("texture.png");
+        image::RgbaImage::from_fn(6, 4, |x, y| image::Rgba([(x * 40) as u8, (y * 60) as u8, 90, 255])).save(&path).unwrap();
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        let picked = path.to_string_lossy().into_owned();
+        app.services.pick_open = Some(Box::new(move |_: &crate::FilePick| Some(picked.clone())));
+        app.services.read = Some(Box::new(|p: &str| std::fs::read(p).map_err(|e| e.to_string())));
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("effect.dialog", json!({"effect": ROUGH_PASTELS})).unwrap();
+        let paint = |app: &mut VectorzApp| crate::tests_labels::painted_text(app, |app, ui| super::super::show(app, ui.ctx()));
+        let text = paint(&mut app);
+        assert!(text.lines().any(|l| l == "Load Texture…") && text.lines().any(|l| l == "Canvas") && text.lines().any(|l| l == "Top"), "{text}");
+        assert!(!text.contains("Loaded Texture") && !text.contains(" px"), "{text}");
+        let mut d = app.ui.dialog.take().unwrap();
+        load_texture(&mut app, &mut d).unwrap();
+        let stored = d.str(vectorz_effects::pixel::TEXTURE_IMAGE);
+        assert_eq!((d.str("texture"), vectorz_effects::pixel::texture(&stored).map(|t| t.size())), ("loaded".to_string(), Some((6, 4))));
+        app.ui.dialog = Some(d);
+        let text = paint(&mut app);
+        assert!(text.lines().any(|l| l == "Loaded Texture") && text.lines().any(|l| l == "6 × 4 px"), "{text}");
+        assert!(!text.contains(&stored[..24]), "the stored text isn't shown");
+        super::super::confirm(&mut app).unwrap();
+        let st = app.session.doc().unwrap();
+        let params = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0].params;
+        assert_eq!((&params["texture"], &params["textureImage"]), (&json!("loaded"), &json!(stored)));
+        let shown = shown_choices(ROUGH_PASTELS, "texture", params.as_object().unwrap(), false).unwrap();
+        assert_eq!(shown.last().map(|(_, v)| v.as_str()), Some(vectorz_effects::pixel::LOADED), "{shown:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Effect > Stylize > Outer Glow: a swatch beside Color shows the effect's colour, typing a
+    /// hex recolours it, and a double-click opens the Color Picker over the dialog; its OK fills
+    /// Color, and the effect applies that colour.
+    #[test]
+    fn outer_glow_colour_swatch_opens_the_color_picker() {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("effect.dialog", json!({"effect": "stylize.outerGlow"})).unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, Default::default());
+        let frame = |app: &mut VectorzApp, time: f64, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| super::super::show(app, ui.ctx()));
+            out.textures_delta.clear();
+            out
+        };
+        for n in 0..6 {
+            frame(&mut app, f64::from(n) * 0.01, vec![]);
+        }
+        let rect = ctx.read_response(form::colour_swatch_id("color")).expect("the colour swatch is drawn").rect;
+        // The colour of the swatch drawn at `rect`.
+        let swatch = |out: &egui::FullOutput| {
+            out.shapes.iter().find_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.rect == rect => Some(r.fill),
+                _ => None,
+            })
+        };
+        let yellow = egui::Color32::from_rgb(255, 255, 0);
+        assert_eq!(swatch(&frame(&mut app, 0.2, vec![])), Some(yellow), "the swatch shows the effect's #ffff00");
+        // Typing a colour recolours the swatch.
+        app.ui.dialog.as_mut().unwrap().fields.insert("color".into(), json!("#ff0000"));
+        assert_eq!(swatch(&frame(&mut app, 0.25, vec![])), Some(egui::Color32::from_rgb(255, 0, 0)), "typing a hex recolours the swatch");
+        // A double-click opens the Color Picker on the field's colour.
+        let pos = rect.center();
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        frame(&mut app, 0.3, vec![egui::Event::PointerMoved(pos), button(true)]);
+        frame(&mut app, 0.35, vec![button(false)]);
+        frame(&mut app, 0.4, vec![button(true)]);
+        frame(&mut app, 0.45, vec![button(false)]);
+        frame(&mut app, 0.5, vec![]);
+        let d = app.ui.dialog.as_ref().expect("a dialog");
+        assert_eq!(d.kind, "colorPicker", "a double-click opens the Color Picker over the effect dialog");
+        assert_eq!(d.fields.get("color").and_then(vectorz_engine::cmd::color_value), Some(Color::rgb(1.0, 0.0, 0.0)), "on the field's colour");
+        // Its OK fills the effect's Color, and the effect applies it.
+        app.ui.dialog.as_mut().unwrap().fields.insert("color".into(), json!("#00ff00"));
+        super::super::confirm(&mut app).unwrap();
+        let d = app.ui.dialog.as_ref().expect("the effect dialog is back");
+        assert_eq!((d.kind.as_str(), d.fields.get("color")), ("effect", Some(&json!("#00ff00"))), "OK fills Color and comes back");
+        frame(&mut app, 0.6, vec![]);
+        super::super::confirm(&mut app).unwrap();
+        let st = app.session.doc().unwrap();
+        let fx = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0];
+        assert_eq!(fx.params.get("color"), Some(&json!("#00ff00")), "Outer Glow takes the picked colour");
+    }
+
+    /// Effect > Stylize > Drop Shadow: Color has a swatch beside its field, as Outer Glow's does
+    /// (#5364); a double-click opens the Color Picker over the dialog, whose OK fills Color and
+    /// comes back, and the effect applies the picked colour. With Darkness chosen the swatch is
+    /// dimmed and opens nothing.
+    #[test]
+    fn drop_shadow_colour_swatch_opens_the_color_picker() {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("effect.dialog", json!({"effect": DROP_SHADOW})).unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, Default::default());
+        let frame = |app: &mut VectorzApp, time: f64, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| super::super::show(app, ui.ctx()));
+            out.textures_delta.clear();
+            out
+        };
+        for n in 0..6 {
+            frame(&mut app, f64::from(n) * 0.01, vec![]);
+        }
+        let rect = ctx.read_response(form::colour_swatch_id("color")).expect("the colour swatch is drawn").rect;
+        let swatch = |out: &egui::FullOutput| {
+            out.shapes.iter().find_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.rect == rect => Some(r.fill),
+                _ => None,
+            })
+        };
+        assert_eq!(swatch(&frame(&mut app, 0.2, vec![])), Some(egui::Color32::BLACK), "the swatch shows the shadow's #000000");
+        let pos = rect.center();
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let double_click = |app: &mut VectorzApp, t: f64| {
+            frame(app, t, vec![egui::Event::PointerMoved(pos), button(true)]);
+            frame(app, t + 0.05, vec![button(false)]);
+            frame(app, t + 0.1, vec![button(true)]);
+            frame(app, t + 0.15, vec![button(false)]);
+            frame(app, t + 0.2, vec![]);
+        };
+        // With Darkness chosen the swatch opens nothing.
+        app.ui.dialog.as_mut().unwrap().fields.insert("shade".into(), json!("darkness"));
+        frame(&mut app, 0.25, vec![]);
+        double_click(&mut app, 0.3);
+        assert_eq!(app.ui.dialog.as_ref().unwrap().kind, "effect", "a dimmed swatch opens nothing");
+        app.ui.dialog.as_mut().unwrap().fields.insert("shade".into(), json!("color"));
+        frame(&mut app, 0.6, vec![]);
+        double_click(&mut app, 0.7);
+        let d = app.ui.dialog.as_ref().expect("a dialog");
+        assert_eq!(d.kind, "colorPicker", "a double-click opens the Color Picker over Drop Shadow");
+        assert_eq!(d.fields.get("color").and_then(vectorz_engine::cmd::color_value), Some(Color::rgb(0.0, 0.0, 0.0)), "on the shadow's colour");
+        app.ui.dialog.as_mut().unwrap().fields.insert("color".into(), json!("#0000ff"));
+        super::super::confirm(&mut app).unwrap();
+        let d = app.ui.dialog.as_ref().expect("Drop Shadow is back");
+        assert_eq!((d.kind.as_str(), d.fields.get("color")), ("effect", Some(&json!("#0000ff"))), "OK fills Color and comes back");
+        frame(&mut app, 1.2, vec![]);
+        super::super::confirm(&mut app).unwrap();
+        let st = app.session.doc().unwrap();
+        let fx = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0];
+        assert_eq!((fx.id.as_str(), fx.params.get("color")), (DROP_SHADOW, Some(&json!("#0000ff"))), "Drop Shadow takes the picked colour");
+    }
+
+    /// Effect > Stylize > Drop Shadow and Outer Glow: Opacity, the offsets, Blur and Darkness have
+    /// spinner arrows (#5367, #5368). A click on the top half steps up, on the bottom half down;
+    /// Opacity stops at 100 % and Blur at 0, and OK applies the stepped values.
+    #[test]
+    fn drop_shadow_and_outer_glow_fields_have_spinner_arrows() {
+        for (effect, count) in [("stylize.dropShadow", 5), ("stylize.outerGlow", 2)] {
+            let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+            let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+            app.run("select.all", json!({})).unwrap();
+            app.run("effect.dialog", json!({"effect": effect})).unwrap();
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            crate::theme::install_fonts(&ctx);
+            crate::theme::apply(&ctx, Default::default());
+            let time = std::cell::Cell::new(0.0);
+            // One frame → the spinners' bounds, top to bottom.
+            let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
+                time.set(time.get() + 0.05);
+                let mut out =
+                    ctx.run_ui(egui::RawInput { time: Some(time.get()), events, ..Default::default() }, |ui| super::super::show(app, ui.ctx()));
+                out.textures_delta.clear();
+                let mut spinners: Vec<egui::Rect> = out
+                    .platform_output
+                    .accesskit_update
+                    .map(|u| u.nodes)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|(_, n)| n.label() == Some("Step up or down"))
+                    .filter_map(|(_, n)| n.bounds())
+                    .map(|b| egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)))
+                    .collect();
+                spinners.sort_by(|a, b| a.top().total_cmp(&b.top()));
+                spinners
+            };
+            for _ in 0..6 {
+                frame(&mut app, vec![]);
+            }
+            let spinners = frame(&mut app, vec![]);
+            assert_eq!(spinners.len(), count, "{effect}: a spinner beside each number field: {spinners:?}");
+            let click = |app: &mut VectorzApp, r: egui::Rect, up: bool| {
+                let pos = r.center() + egui::vec2(0.0, if up { -r.height() / 4.0 } else { r.height() / 4.0 });
+                let button =
+                    |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+                frame(app, vec![egui::Event::PointerMoved(pos), button(true)]);
+                frame(app, vec![button(false)]);
+                frame(app, vec![]);
+            };
+            let (opacity, blur) = (spinners[0], spinners[count - 1 - usize::from(count == 5)]);
+            click(&mut app, opacity, true);
+            let field = |app: &VectorzApp, k: &str| app.ui.dialog.as_ref().unwrap().fields.get(k).and_then(Value::as_f64);
+            assert_eq!(field(&app, "opacity"), Some(76.0), "{effect}: the up arrow steps Opacity up");
+            click(&mut app, blur, false);
+            assert_eq!(field(&app, "blur"), Some(4.0), "{effect}: the down arrow steps Blur down");
+            app.ui.dialog.as_mut().unwrap().fields.insert("opacity".into(), json!(100.0));
+            app.ui.dialog.as_mut().unwrap().fields.insert("blur".into(), json!(0.0));
+            frame(&mut app, vec![]);
+            click(&mut app, opacity, true);
+            click(&mut app, blur, false);
+            assert_eq!((field(&app, "opacity"), field(&app, "blur")), (Some(100.0), Some(0.0)), "{effect}: the arrows stop at the ends");
+            click(&mut app, opacity, false);
+            if count == 5 {
+                click(&mut app, spinners[1], true);
+                assert_eq!(field(&app, "x"), Some(8.0), "the X offset steps up");
+                let darkness = spinners[4];
+                app.ui.dialog.as_mut().unwrap().fields.insert("shade".into(), json!("darkness"));
+                frame(&mut app, vec![]);
+                click(&mut app, darkness, false);
+                assert_eq!(field(&app, "darkness"), Some(99.0), "Darkness steps down");
+            }
+            super::super::confirm(&mut app).unwrap();
+            let st = app.session.doc().unwrap();
+            let fx = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0];
+            let param = |k: &str| fx.params.get(k).and_then(Value::as_f64);
+            assert_eq!((param("opacity"), param("blur")), (Some(99.0), Some(0.0)), "{effect}: OK applies them");
+        }
+    }
+
+    /// Effect > Blur > Radial Blur: a press in the Blur Center box puts the center there, the
+    /// arrow keys move it 1 % (10 % with Shift) and stop at the edges, screen readers get its
+    /// position, the generic rows leave it to the box, and OK applies it.
+    #[test]
+    fn radial_blur_center_box_sets_the_center_by_pointer_and_keys() {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("effect.dialog", json!({"effect": RADIAL_BLUR})).unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, Default::default());
+        let time = std::cell::Cell::new(0.0);
+        // One frame → the box's screen-reader node (bounds, value) and the labels drawn.
+        let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
+            time.set(time.get() + 0.05);
+            let mut out = ctx.run_ui(egui::RawInput { time: Some(time.get()), events, ..Default::default() }, |ui| super::super::show(app, ui.ctx()));
+            out.textures_delta.clear();
+            let nodes = out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default();
+            let labels: Vec<String> = nodes.iter().filter_map(|(_, n)| n.label().map(str::to_string)).collect();
+            let center = nodes.iter().find(|(_, n)| n.label() == Some("Blur Center") && n.role() == egui::accesskit::Role::Slider).map(|(_, n)| {
+                let b = n.bounds().unwrap_or_default();
+                (egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)), n.value().map(str::to_string))
+            });
+            (center, labels)
+        };
+        for _ in 0..6 {
+            frame(&mut app, vec![]);
+        }
+        let (Some((rect, value)), labels) = frame(&mut app, vec![]) else { panic!("the dialog has a Blur Center box") };
+        assert_eq!(value.as_deref(), Some("Horizontal: 50%, Vertical: 50%"), "the default center is the middle");
+        assert!(!labels.iter().any(|l| l.starts_with("Center")), "no plain Center X or Center Y rows: {labels:?}");
+        let field = |app: &VectorzApp, k: &str| app.ui.dialog.as_ref().unwrap().fields.get(k).and_then(Value::as_f64);
+        let pos = rect.min + egui::vec2(0.25 * rect.width(), 0.75 * rect.height());
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        frame(&mut app, vec![egui::Event::PointerMoved(pos), button(true)]);
+        frame(&mut app, vec![button(false)]);
+        frame(&mut app, vec![]);
+        let at = |app: &VectorzApp| (field(app, "centerX").unwrap_or(-1.0), field(app, "centerY").unwrap_or(-1.0));
+        let (x, y) = at(&app);
+        assert!((x - 0.25).abs() < 0.01 && (y - 0.75).abs() < 0.01, "the press puts the center there: {x}, {y}");
+        let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        app.ui.dialog.as_mut().unwrap().fields.insert("centerX".into(), json!(0.25));
+        app.ui.dialog.as_mut().unwrap().fields.insert("centerY".into(), json!(0.75));
+        frame(&mut app, vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)]);
+        frame(&mut app, vec![key(egui::Key::ArrowUp, egui::Modifiers::SHIFT)]);
+        assert_eq!(at(&app), (0.26, 0.65), "the arrow keys move it 1 %, 10 % with Shift");
+        for _ in 0..10 {
+            frame(&mut app, vec![key(egui::Key::ArrowDown, egui::Modifiers::SHIFT)]);
+        }
+        assert_eq!(at(&app), (0.26, 1.0), "it stops at the edge");
+        let (Some((_, value)), _) = frame(&mut app, vec![]) else { panic!("the box is still there") };
+        assert_eq!(value.as_deref(), Some("Horizontal: 26%, Vertical: 100%"));
+        super::super::confirm(&mut app).unwrap();
+        let st = app.session.doc().unwrap();
+        let fx = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0];
+        assert_eq!(
+            (fx.id.as_str(), fx.params["centerX"].as_f64(), fx.params["centerY"].as_f64()),
+            (RADIAL_BLUR, Some(0.26), Some(1.0)),
+            "OK applies it"
+        );
+    }
+
+    /// A Radial Blur whose saved Blur Center lies outside the object's bounds (a document written
+    /// by hand or by another build) opens with the center at the nearest edge, and OK stores that
+    /// edge instead of sending the saved value, which `effect.setParams` refuses.
+    #[test]
+    fn radial_blur_center_outside_the_bounds_opens_at_the_edge_and_ok_keeps_it() {
+        let mut app = VectorzApp::new(vectorz_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("effect.apply", json!({"effect": RADIAL_BLUR, "params": {"amount": 20}})).unwrap();
+        {
+            let st = app.session.doc_mut().unwrap();
+            let d = std::sync::Arc::make_mut(&mut st.doc);
+            let fx = &mut d.node_mut(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0];
+            fx.params["centerX"] = json!(1.5);
+            fx.params["centerY"] = json!(-0.25);
+        }
+        app.run("effect.dialog", json!({"effect": RADIAL_BLUR, "index": 0})).unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, Default::default());
+        for k in 0..4 {
+            let input = egui::RawInput { time: Some(f64::from(k) * 0.05), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| super::super::show(&mut app, ui.ctx()));
+            out.textures_delta.clear();
+        }
+        let field = |k: &str| app.ui.dialog.as_ref().unwrap().fields.get(k).and_then(Value::as_f64);
+        assert_eq!((field("centerX"), field("centerY")), (Some(1.0), Some(0.0)), "the fields hold the center the box shows");
+        super::super::confirm(&mut app).unwrap();
+        let st = app.session.doc().unwrap();
+        let fx = &st.doc.node(vectorz_doc::NodeId(id)).unwrap().appearance.effects[0];
+        assert_eq!((fx.params["centerX"].as_f64(), fx.params["centerY"].as_f64()), (Some(1.0), Some(0.0)), "OK stores the edge");
     }
 }
