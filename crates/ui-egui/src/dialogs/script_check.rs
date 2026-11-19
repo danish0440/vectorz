@@ -40,7 +40,7 @@ pub(crate) fn command(app: &mut VectorzApp, p: &Value) -> Result<Value, String> 
         if app.services.open_async.is_some() {
             return io::open_dialog(app).map(|_| Value::Null);
         }
-        let pick = FilePick { filters: vec![("Scripts", vectorz_engine::cmd::scripts::EXTS)], ..Default::default() };
+        let pick = FilePick { filters: vec![FilePick::filter("Scripts", vectorz_engine::cmd::scripts::EXTS)], ..Default::default() };
         params = json!({ "path": crate::picks::open(app, &pick).ok_or("cancelled")? });
     }
     if params.get("path").is_some()
@@ -271,7 +271,7 @@ fn report(ui: &mut egui::Ui, r: &Value, t: &Tokens) {
                     for p in problems {
                         let Some(label) = p["code"].as_str().and_then(problem_label) else { continue };
                         let label = match p["detail"].as_str() {
-                            Some(detail) => format!("{label}: {detail}"),
+                            Some(detail) => format!("{} {detail}", crate::i18n::colon(label)),
                             None => label.to_string(),
                         };
                         row(ui, t, &label, false, &place(p));

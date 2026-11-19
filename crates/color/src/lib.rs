@@ -16,7 +16,7 @@ pub mod swatch;
 
 pub use blend::BlendMode;
 pub use freeform::{Freeform, FreeformMode, FreeformPoint};
-pub use gradient::{Gradient, GradientGeom, GradientKind, GradientPaint, GradientStop};
+pub use gradient::{Gradient, GradientGeom, GradientKind, GradientMethod, GradientPaint, GradientSpread, GradientStop};
 pub use libraries::SwatchLibrary;
 pub use swatch::{Swatch, SwatchGroup, default_swatches};
 
@@ -102,14 +102,25 @@ impl Color {
     pub fn to_lab(&self) -> cms::Lab {
         cms::active().lab(self)
     }
-    /// Colour-managed CMYK in the working CMYK space with `intent` (see [`Color::to_cmyk`] for the
-    /// profile-free formula).
+    /// Color-managed CMYK in the active CMYK space (the front document's assigned CMYK profile, else
+    /// the working CMYK space) with `intent` (see [`Color::to_cmyk`] for the profile-free formula).
     pub fn to_cmyk_managed(&self, intent: cms::Intent) -> [f32; 4] {
         cms::active().to_cmyk(self, intent)
     }
-    /// Gamut warning: true when this colour can't be reproduced in the working CMYK space.
+    /// Gamut warning: true when this color can't be reproduced in the active CMYK space (the front
+    /// document's assigned CMYK profile, else the working CMYK space).
     pub fn out_of_gamut(&self) -> bool {
         cms::active().out_of_gamut(self)
+    }
+    /// The colour exactly, as a key: its model and its components' bits (colours that only look
+    /// alike, as a grey and the same RGB grey, differ).
+    pub fn key(&self) -> [u32; 5] {
+        match *self {
+            Color::Rgb { r, g, b } => [0, r.to_bits(), g.to_bits(), b.to_bits(), 0],
+            Color::Cmyk { c, m, y, k } => [1, c.to_bits(), m.to_bits(), y.to_bits(), k.to_bits()],
+            Color::Gray { k } => [2, k.to_bits(), 0, 0, 0],
+            Color::Lab { l, a, b } => [3, l.to_bits(), a.to_bits(), b.to_bits(), 0],
+        }
     }
     pub fn to_rgba8(&self, alpha: f32) -> [u8; 4] {
         let [r, g, b] = self.to_rgb();
@@ -133,36 +144,11 @@ impl Color {
     }
     /// HSB with hue in degrees 0..360, saturation and brightness 0..1.
     pub fn to_hsb(&self) -> [f32; 3] {
-        let [r, g, b] = self.to_rgb();
-        let max = r.max(g).max(b);
-        let min = r.min(g).min(b);
-        let d = max - min;
-        let h = if d <= 0.0 {
-            0.0
-        } else if max == r {
-            60.0 * (((g - b) / d).rem_euclid(6.0))
-        } else if max == g {
-            60.0 * ((b - r) / d + 2.0)
-        } else {
-            60.0 * ((r - g) / d + 4.0)
-        };
-        let s = if max <= 0.0 { 0.0 } else { d / max };
-        [h, s, max]
+        rgb_to_hsb(self.to_rgb())
     }
     pub fn from_hsb(h: f32, s: f32, v: f32) -> Self {
-        let h = h.rem_euclid(360.0) / 60.0;
-        let c = v * s;
-        let x = c * (1.0 - (h % 2.0 - 1.0).abs());
-        let (r, g, b) = match h as u32 {
-            0 => (c, x, 0.0),
-            1 => (x, c, 0.0),
-            2 => (0.0, c, x),
-            3 => (0.0, x, c),
-            4 => (x, 0.0, c),
-            _ => (c, 0.0, x),
-        };
-        let m = v - c;
-        Color::Rgb { r: r + m, g: g + m, b: b + m }
+        let [r, g, b] = hsb_to_rgb([h, s, v]);
+        Color::Rgb { r, g, b }
     }
     /// `#rrggbb` (display RGB).
     pub fn to_hex(&self) -> String {
@@ -315,6 +301,45 @@ impl Color {
     }
 }
 
+/// HSB (hue in degrees 0..360, saturation and brightness 0..1) of RGB numbers 0..1, with no color
+/// conversion ([`Color::to_hsb`] reads the display color first).
+pub fn rgb_to_hsb([r, g, b]: [f32; 3]) -> [f32; 3] {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let h = if d <= 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / d).rem_euclid(6.0))
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    // f32 rounding in rem_euclid can yield exactly 360; wrap back to 0.
+    let h = if h >= 360.0 { 0.0 } else { h };
+    let s = if max <= 0.0 { 0.0 } else { d / max };
+    [h, s, max]
+}
+
+/// RGB numbers 0..1 of HSB `[h, s, v]` (hue in degrees, saturation and brightness 0..1): the inverse
+/// of [`rgb_to_hsb`].
+pub fn hsb_to_rgb([h, s, v]: [f32; 3]) -> [f32; 3] {
+    let h = h.rem_euclid(360.0) / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
+
 /// `new` expressed in the colour model of `orig` ([`Color::in_model`]): results of colour operations
 /// (harmonies, blends, inversions, recolouring) keep the model of the colour they came from.
 pub fn keep_model(orig: Color, new: Color) -> Color {
@@ -378,6 +403,18 @@ impl Paint {
             _ => None,
         }
     }
+    /// This stroke paint as the fill of the stroke's outline, so the outline looks as the stroke
+    /// did: without dither, which strokes ignore ([`GradientPaint::draws_as_pixels`]).
+    pub fn stroke_as_fill(&self) -> Paint {
+        match self {
+            Paint::Gradient(g) if g.gradient.dither => {
+                let mut g = g.clone();
+                g.gradient.dither = false;
+                Paint::Gradient(g)
+            }
+            p => p.clone(),
+        }
+    }
     /// The Registration colour: 100% of every ink, linked to [`swatch::REGISTRATION`].
     pub fn registration() -> Self {
         Paint::Solid { color: Color::cmyk(1.0, 1.0, 1.0, 1.0), swatch: Some(swatch::REGISTRATION.into()), tint: 1.0 }
@@ -398,9 +435,10 @@ impl Paint {
     }
     /// Apply `f` to the colours of this paint that can link to a swatch (a solid colour, each
     /// gradient stop) with their link and tint; `f` returns true when it changed them. A colour
-    /// left without a link gets tint 1. A freeform gradient's points, which it draws from, go
-    /// through `f` too, as unlinked colours (a link `f` gives them is dropped). Returns whether
-    /// anything changed.
+    /// left without a link gets tint 1, and a stop left without one also loses its process plates
+    /// ([`GradientStop::plates`], which print with a linked spot tint). A freeform gradient's
+    /// points, which it draws from, go through `f` too, as unlinked colours (a link `f` gives them
+    /// is dropped). Returns whether anything changed.
     pub fn map_links(&mut self, f: &mut dyn FnMut(&mut Color, &mut Option<String>, &mut f32) -> bool) -> bool {
         let mut one = |c: &mut Color, link: &mut Option<String>, tint: &mut f32| {
             let changed = f(c, link, tint);
@@ -412,7 +450,11 @@ impl Paint {
         match self {
             Paint::Solid { color, swatch, tint } => one(color, swatch, tint),
             Paint::Gradient(g) => {
-                let stops = g.gradient.stops.iter_mut().fold(false, |ch, s| one(&mut s.color, &mut s.swatch, &mut s.tint) | ch);
+                let stops = g.gradient.stops.iter_mut().fold(false, |ch, s| {
+                    let changed = one(&mut s.color, &mut s.swatch, &mut s.tint);
+                    let unplated = s.swatch.is_none() && s.plates.take().is_some();
+                    changed | unplated | ch
+                });
                 let points =
                     g.freeform.iter_mut().flat_map(|ff| ff.points.iter_mut()).fold(false, |ch, p| one(&mut p.color, &mut None, &mut 1.0) | ch);
                 stops | points
@@ -425,6 +467,12 @@ impl Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hue_below_360() {
+        let h = Color::Rgb { r: 1.0, g: 0.0, b: 1e-7 }.to_hsb()[0];
+        assert!((0.0..360.0).contains(&h), "hue {h}");
+    }
 
     #[test]
     fn hex_roundtrip() {
@@ -548,6 +596,34 @@ mod tests {
         });
         let Paint::Gradient(g) = g else { panic!("a gradient") };
         assert!(g.gradient.stops.iter().all(|s| s.swatch.as_deref() == Some("Ink") && s.tint == 0.5));
+    }
+
+    #[test]
+    fn mapping_links_drops_the_process_plates_of_unlinked_stops() {
+        let mut gradient = Gradient::default();
+        let ink = Color::cmyk(0.0, 0.4, 0.0, 0.0);
+        gradient.stops[0].swatch = Some("Ink".into());
+        (gradient.stops[0].color, gradient.stops[0].tint, gradient.stops[0].plates) = (ink, 0.4, Some([0.3, 0.0, 0.0, 0.0]));
+        let mut g = Paint::Gradient(Box::new(GradientPaint::new(gradient)));
+        // Unlinking the stop takes its plates with its tint and keeps the colour it shows.
+        assert!(g.map_links(&mut |_, l, _| l.take().is_some()));
+        let Paint::Gradient(gp) = &g else { panic!("a gradient") };
+        let st = &gp.gradient.stops[0];
+        assert_eq!((st.color, st.swatch.as_deref(), st.tint, st.plates), (ink, None, 1.0, None));
+        // A linked stop keeps its plates.
+        let mut linked = Gradient::default();
+        (linked.stops[0].swatch, linked.stops[0].plates) = (Some("Ink".into()), Some([0.3, 0.0, 0.0, 0.0]));
+        let mut l = Paint::Gradient(Box::new(GradientPaint::new(linked)));
+        assert!(!l.map_links(&mut |_, _, _| false));
+        let Paint::Gradient(lp) = &l else { panic!("a gradient") };
+        assert_eq!(lp.gradient.stops[0].plates, Some([0.3, 0.0, 0.0, 0.0]));
+        // An unlinked stop that still has plates loses them, and that counts as a change.
+        let mut stale = Gradient::default();
+        stale.stops[1].plates = Some([0.0, 0.0, 0.2, 0.0]);
+        let mut p = Paint::Gradient(Box::new(GradientPaint::new(stale)));
+        assert!(p.map_links(&mut |_, _, _| false));
+        let Paint::Gradient(pp) = &p else { panic!("a gradient") };
+        assert!(pp.gradient.stops.iter().all(|s| s.plates.is_none()));
     }
 
     #[test]

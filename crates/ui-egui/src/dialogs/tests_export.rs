@@ -16,10 +16,15 @@ pub(super) type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 /// An app with `artboards` 60×40 pt artboards whose save dialog answers `/out/<suggested>` and
 /// whose writer records what it is given.
 pub(super) fn app(artboards: usize) -> (VectorzApp, Written) {
+    app_saving(artboards, |p| format!("/out/{}", p.name))
+}
+
+/// [`app`], with a save dialog that answers `pick`.
+pub(super) fn app_saving(artboards: usize, pick: fn(&crate::FilePick) -> String) -> (VectorzApp, Written) {
     let written = Written::default();
     let w = written.clone();
     let services = Services {
-        pick_save: Some(Box::new(|p: &crate::FilePick| Some(format!("/out/{}", p.name)))),
+        pick_save: Some(Box::new(move |p: &crate::FilePick| Some(pick(p)))),
         write: Some(Box::new(move |p: &str, b: &[u8]| {
             w.borrow_mut().push((p.to_string(), b.to_vec()));
             Ok(())
@@ -75,7 +80,24 @@ fn png_options_draw_and_export_with_the_chosen_options() {
     assert_eq!(png[28], 1, "interlaced");
     let phys = png.windows(4).position(|w| w == b"pHYs").unwrap();
     assert_eq!(&png[phys + 4..phys + 8], ((200.0f64 / 0.0254).round() as u32).to_be_bytes());
-    let img = image::load_from_memory(&png).unwrap().to_rgba8();
+    let img = craft_image_codecs::decode(&png)
+        .map(|__cimg| {
+            let (__w, __h) = __cimg.dimensions();
+            match (__cimg.layout(), __cimg.sample_type()) {
+                (craft_image_codecs::ChannelLayout::Gray, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                (craft_image_codecs::ChannelLayout::GrayA, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                (craft_image_codecs::ChannelLayout::Rgb, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                _ => image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(__w, __h, __cimg.to_rgba8()).unwrap()),
+            }
+        })
+        .unwrap()
+        .to_rgba8();
     assert_eq!(img.dimensions(), (167, 111), "60 × 40 pt at 200 ppi");
     assert_eq!(img.get_pixel(0, 0).0, [0x20, 0x40, 0x80, 255]);
     // JPEG Options: quality, and no transparent background.
@@ -99,6 +121,58 @@ fn export_as_png_picks_the_file_then_shows_png_options() {
     let r = app.run("file.export.png", json!({"path": "/x/a.png", "ppi": 144})).unwrap();
     assert_eq!(r["path"], "/x/a.png");
     assert_eq!(&written.borrow()[0].1[16..20], 120u32.to_be_bytes(), "60 pt at 144 ppi");
+}
+
+/// File › Export › Export As PNG… exports the artboard in use, not the first (#5502), and each
+/// artboard the Artboard tool has selected, one file each.
+#[test]
+fn export_as_png_exports_the_active_artboard() {
+    let (mut app, written) = app(2);
+    // The ellipse is on the first artboard; the second is empty.
+    let opaque = |bytes: &[u8]| {
+        craft_image_codecs::decode(bytes)
+            .map(|__cimg| {
+                let (__w, __h) = __cimg.dimensions();
+                match (__cimg.layout(), __cimg.sample_type()) {
+                    (craft_image_codecs::ChannelLayout::Gray, craft_image_codecs::SampleType::U8) => {
+                        image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                    }
+                    (craft_image_codecs::ChannelLayout::GrayA, craft_image_codecs::SampleType::U8) => {
+                        image::DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                    }
+                    (craft_image_codecs::ChannelLayout::Rgb, craft_image_codecs::SampleType::U8) => {
+                        image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                    }
+                    _ => image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(__w, __h, __cimg.to_rgba8()).unwrap()),
+                }
+            })
+            .unwrap()
+            .to_rgba8()
+            .pixels()
+            .any(|p| p.0[3] > 0)
+    };
+    app.view_mut().unwrap().artboard = 1;
+    app.run("file.export.png", json!({})).unwrap();
+    assert_eq!(app.ui.dialog.as_ref().unwrap().fields["artboard"], json!(1));
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    assert!(!opaque(&written.borrow()[0].1), "the second artboard, which is empty");
+    app.view_mut().unwrap().artboard = 0;
+    app.run("file.export.png", json!({})).unwrap();
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    assert!(opaque(&written.borrow()[1].1), "the first artboard, with the ellipse");
+    // A choice given is kept.
+    app.run("file.export.png", json!({"useArtboards": false})).unwrap();
+    assert!(app.ui.dialog.as_ref().unwrap().fields.get("artboard").is_none_or(serde_json::Value::is_null));
+    app.ui.dialog = None;
+    // Artboards the Artboard tool selected: one file each.
+    app.select_tool("artboard");
+    app.session.set_tool_option("selected", &json!([0, 1]));
+    app.run("file.export.png", json!({})).unwrap();
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    assert_eq!(names(&written)[2..], ["/out/Untitled-1-Artboard-1.png", "/out/Untitled-1-Artboard-2.png"]);
 }
 
 #[test]
@@ -129,7 +203,24 @@ fn export_as_with_a_range_then_png_options_writes_one_file_per_artboard() {
     assert_eq!(names(&written), ["/out/Untitled-1-Artboard-1.png", "/out/Untitled-1-Artboard-3.png"]);
     let png = &written.borrow()[0].1;
     assert_eq!(png[28], 1, "interlaced");
-    let img = image::load_from_memory(png).unwrap().to_rgba8();
+    let img = craft_image_codecs::decode(png)
+        .map(|__cimg| {
+            let (__w, __h) = __cimg.dimensions();
+            match (__cimg.layout(), __cimg.sample_type()) {
+                (craft_image_codecs::ChannelLayout::Gray, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                (craft_image_codecs::ChannelLayout::GrayA, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                (craft_image_codecs::ChannelLayout::Rgb, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                _ => image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(__w, __h, __cimg.to_rgba8()).unwrap()),
+            }
+        })
+        .unwrap()
+        .to_rgba8();
     assert_eq!(img.dimensions(), (120, 80), "144 ppi");
     assert!(img.pixels().all(|p| p[3] == 0 || p[3] == 255), "no anti-aliasing");
 }
@@ -144,8 +235,120 @@ fn a_bad_range_keeps_export_as_open() {
     assert!(written.borrow().is_empty());
 }
 
+/// An emptied Range field shows an example of the artboard numbers it takes, as Save As's does.
 #[test]
-fn svg_continues_in_svg_options_and_pdf_art_is_written_directly() {
+fn an_empty_export_as_range_shows_an_example() {
+    let (mut app, _) = app(2);
+    app.run("file.exportAs", json!({"useArtboards": true, "range": ""})).unwrap();
+    let text = crate::tests_labels::painted_text(&mut app, |app, ui| show(app, ui.ctx()));
+    assert!(text.lines().any(|l| l == "1-3, 5"), "{text}");
+}
+
+/// #5941: the Format list showed no scroll bar until the pointer came over it, so nothing told
+/// the user that more formats lay below the last one shown, and it opened again where it was last
+/// scrolled, with its first formats out of view. Opened with the pointer elsewhere and a format
+/// near the end chosen, a list that does not show every format shows its bar, the chosen format shows
+/// whole, and a list opened again after a scroll shows the same rows as when it first opened.
+#[test]
+fn the_format_list_shows_its_scroll_bar_at_rest_and_opens_with_the_chosen_format_in_view() {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, texts: &mut Vec<(String, egui::Rect, egui::Rect)>, bars: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Text(t) => texts.push((t.galley.text().into(), t.visual_bounding_rect(), clip)),
+            egui::Shape::Rect(r) if r.fill.a() > 0 && r.rect.width() <= 8.0 && r.rect.height() > 40.0 => bars.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, texts, bars)),
+            _ => {}
+        }
+    }
+    let labels: Vec<&str> = export_as::formats().iter().map(|f| f.label).collect();
+    // A built-in format six from the end of the built-in ones: out of view when the list opens at
+    // its top, and far enough from the end that a plug-in format another test adds after the
+    // built-in ones does not move the rows shown around it.
+    let built_in: Vec<_> = fileio::FORMATS.iter().filter(|f| f.write && !matches!(f.id, "vectorz" | "ai")).collect();
+    let chosen = built_in.len().checked_sub(6).and_then(|i| built_in.get(i)).copied().expect("Export As lists formats");
+    let (mut app, _) = app(1);
+    app.run("file.exportAs", json!({"format": chosen.id})).unwrap();
+    let ctx = egui::Context::default();
+    theme::install_fonts(&ctx);
+    theme::apply(&ctx, Default::default());
+    // Every scroll area takes the bar at rest from the theme, whatever style the list sets itself.
+    assert_eq!(ctx.global_style().spacing.scroll, crate::widgets::list_scroll_style());
+    let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 480.0)));
+    let mut time = 0.0;
+    let mut run = |app: &mut VectorzApp, events: Vec<egui::Event>| {
+        time += 0.25;
+        let mut out = ctx.run_ui(egui::RawInput { screen_rect, events, time: Some(time), ..Default::default() }, |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
+        let (mut texts, mut bars) = (vec![], vec![]);
+        out.shapes.iter().for_each(|c| walk(&c.shape, c.clip_rect, &mut texts, &mut bars));
+        (texts, bars)
+    };
+    let away = egui::Event::PointerMoved(egui::pos2(1.0, 1.0));
+    run(&mut app, vec![away.clone()]);
+    let (texts, _) = run(&mut app, vec![]);
+    let field = texts.iter().find(|(s, ..)| s == chosen.label).map(|(_, r, _)| r.center()).expect("the Format field shows the chosen format");
+    let click_at = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    // Opens the list, moves the pointer away and returns the list's rect, the format names drawn in
+    // it with their clip rects, and the bars drawn.
+    type Run<'r> = dyn FnMut(&mut VectorzApp, Vec<egui::Event>) -> (Vec<(String, egui::Rect, egui::Rect)>, Vec<egui::Rect>) + 'r;
+    let open = |run: &mut Run<'_>, app: &mut VectorzApp| {
+        run(app, vec![egui::Event::PointerMoved(field), click_at(field, true)]);
+        run(app, vec![click_at(field, false)]);
+        run(app, vec![away.clone()]);
+        let (mut texts, mut bars) = (vec![], vec![]);
+        for _ in 0..4 {
+            (texts, bars) = run(app, vec![]);
+        }
+        let list = ctx
+            .memory(|m| {
+                m.layer_ids().filter(|l| l.order == egui::Order::Foreground && m.areas().is_visible(l)).last().and_then(|l| m.area_rect(l.id))
+            })
+            .expect("the Format list is open");
+        let rows: Vec<_> = texts.into_iter().filter(|(s, r, _)| labels.contains(&s.as_str()) && list.contains_rect(*r)).collect();
+        (list, rows, bars)
+    };
+    let whole = |rows: &[(String, egui::Rect, egui::Rect)], name: &str| {
+        rows.iter().any(|(s, r, clip)| s == name && r.top() >= clip.top() && r.bottom() <= clip.bottom())
+    };
+    let tops = |rows: &[(String, egui::Rect, egui::Rect)]| rows.iter().map(|(s, r, _)| (s.clone(), r.top().round())).collect::<Vec<_>>();
+    let (list, rows, bars) = open(&mut run, &mut app);
+    assert!(!rows.is_empty(), "the Format list is open");
+    assert!(whole(&rows, chosen.label), "the chosen format shows whole: {:?}", tops(&rows));
+    // A list that shows every format needs no bar; one that does not shows its bar.
+    if rows.len() < labels.len() {
+        assert!(
+            bars.iter().any(|b| list.contains_rect(*b) && b.left() > list.center().x),
+            "the list's scroll bar is drawn at rest in {list:?}: {bars:?}"
+        );
+    }
+
+    // Scrolled, closed and opened again, the list shows the rows it first opened with, not the
+    // offset it was scrolled to.
+    run(&mut app, vec![egui::Event::PointerMoved(list.center())]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 30.0),
+        modifiers: Default::default(),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    run(&mut app, vec![wheel]);
+    let mut scrolled = vec![];
+    for _ in 0..4 {
+        (scrolled, _) = run(&mut app, vec![]);
+    }
+    let scrolled: Vec<_> = scrolled.into_iter().filter(|(s, r, _)| labels.contains(&s.as_str()) && list.contains_rect(*r)).collect();
+    run(&mut app, vec![egui::Event::PointerMoved(field), click_at(field, true)]);
+    run(&mut app, vec![click_at(field, false)]);
+    let (_, reopened, _) = open(&mut run, &mut app);
+    if rows.len() < labels.len() {
+        assert_ne!(tops(&scrolled), tops(&rows), "the wheel scrolled the list");
+    }
+    assert_eq!(tops(&reopened), tops(&rows), "the reopened list shows the rows it first opened with");
+    assert!(whole(&reopened, chosen.label), "the chosen format shows whole: {:?}", tops(&reopened));
+}
+
+#[test]
+fn svg_continues_in_svg_options() {
     let (mut app, written) = app(2);
     app.run("file.exportAs", json!({"format": "svg", "useArtboards": true})).unwrap();
     confirm(&mut app).unwrap();
@@ -156,12 +359,45 @@ fn svg_continues_in_svg_options_and_pdf_art_is_written_directly() {
     confirm(&mut app).unwrap();
     assert!(app.ui.dialog.is_none());
     assert_eq!(names(&written), ["/out/Untitled-1-Artboard-1.svg", "/out/Untitled-1-Artboard-2.svg"]);
-    // Without artboards: one file of the art's bounds, with no options dialog for a PDF.
+}
+
+/// Without Use Artboards, a PDF continues in Save PDF too, without its artboard choice, and the
+/// file is one page of the art's bounds. Its options apply: a drawing 10 m long is written at
+/// full size in points with "Write pages longer than 200 in at full size in points" (on by
+/// default), and with a `UserUnit` without it.
+#[test]
+fn pdf_art_continues_in_the_save_pdf_dialog() {
+    let (mut app, written) = app(2);
     app.run("file.exportAs", json!({"format": "pdf"})).unwrap();
-    let r = confirm(&mut app).unwrap();
-    assert_eq!(r["path"], "/out/Untitled-1.pdf");
-    let pdf = vectorz_pdf::import(&written.borrow()[2].1).unwrap();
+    confirm(&mut app).unwrap();
+    assert_eq!(kind(&app), Some("savePdf"), "the PDF options follow");
+    assert_eq!(app.ui.dialog.as_ref().unwrap().str("path"), "/out/Untitled-1.pdf");
+    assert!(written.borrow().is_empty());
+    frame(&mut app);
+    assert_eq!(confirm(&mut app).unwrap()["path"], "/out/Untitled-1.pdf");
+    let pdf = vectorz_pdf::import(&written.borrow()[0].1).unwrap();
+    assert_eq!(pdf.artboards.len(), 1);
     assert_eq!((pdf.artboards[0].rect.width().round(), pdf.artboards[0].rect.height().round()), (30.0, 20.0), "the ellipse's bounds");
+
+    app.run("shape.rectangle", json!({"x": 0, "y": 100, "width": 28_346.46, "height": 50})).unwrap();
+    app.run("file.exportAs", json!({"format": "pdf"})).unwrap();
+    confirm(&mut app).unwrap();
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    let bytes = written.borrow()[1].1.clone();
+    assert!(!String::from_utf8_lossy(&bytes).contains("/UserUnit"));
+    let width = vectorz_pdf::import(&bytes).unwrap().artboards[0].rect.width();
+    assert!((28_346.0..28_350.0).contains(&width), "{width}");
+
+    app.run("file.exportAs", json!({"format": "pdf"})).unwrap();
+    confirm(&mut app).unwrap();
+    set(&mut app, "longPagesInPoints", json!(false));
+    frame(&mut app);
+    confirm(&mut app).unwrap();
+    let bytes = written.borrow()[2].1.clone();
+    assert!(String::from_utf8_lossy(&bytes).contains("/UserUnit"));
+    let width = vectorz_pdf::import(&bytes).unwrap().artboards[0].rect.width();
+    assert!((28_346.0..28_350.0).contains(&width), "{width}");
 }
 
 #[test]
@@ -178,7 +414,24 @@ fn jpeg_and_webp_options_draw_and_export() {
     set(&mut app, "quality", json!(70));
     frame(&mut app);
     assert_eq!(confirm(&mut app).unwrap()["path"], "/out/Untitled-1.jpg");
-    let img = image::load_from_memory(&written.borrow()[0].1).unwrap().to_rgb8();
+    let img = craft_image_codecs::decode(&written.borrow()[0].1)
+        .map(|__cimg| {
+            let (__w, __h) = __cimg.dimensions();
+            match (__cimg.layout(), __cimg.sample_type()) {
+                (craft_image_codecs::ChannelLayout::Gray, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                (craft_image_codecs::ChannelLayout::GrayA, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                (craft_image_codecs::ChannelLayout::Rgb, craft_image_codecs::SampleType::U8) => {
+                    image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                }
+                _ => image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(__w, __h, __cimg.to_rgba8()).unwrap()),
+            }
+        })
+        .unwrap()
+        .to_rgb8();
     assert_eq!(img.dimensions(), (30, 20));
     let px = img.get_pixel(0, 0);
     assert!(px[2] > 100 && px[0] < 60, "the background colour: {px:?}");
@@ -193,7 +446,27 @@ fn jpeg_and_webp_options_draw_and_export() {
     confirm(&mut app).unwrap();
     let (path, bytes) = written.borrow().last().cloned().unwrap();
     assert_eq!(path, "/out/Untitled-1.webp", "one artboard is one file, named as picked");
-    assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 30);
+    assert_eq!(
+        craft_image_codecs::decode(&bytes)
+            .map(|__cimg| {
+                let (__w, __h) = __cimg.dimensions();
+                match (__cimg.layout(), __cimg.sample_type()) {
+                    (craft_image_codecs::ChannelLayout::Gray, craft_image_codecs::SampleType::U8) => {
+                        image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                    }
+                    (craft_image_codecs::ChannelLayout::GrayA, craft_image_codecs::SampleType::U8) => {
+                        image::DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                    }
+                    (craft_image_codecs::ChannelLayout::Rgb, craft_image_codecs::SampleType::U8) => {
+                        image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(__w, __h, __cimg.into_data()).unwrap())
+                    }
+                    _ => image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(__w, __h, __cimg.to_rgba8()).unwrap()),
+                }
+            })
+            .unwrap()
+            .width(),
+        30
+    );
 }
 
 #[test]
@@ -226,6 +499,23 @@ fn nothing_to_export_keeps_export_as_open_before_the_save_dialog() {
     assert!(written.borrow().is_empty());
 }
 
+/// Art that a plot leaves out (here at 0% opacity) is nothing to export as HP-GL of the art's
+/// bounds, before the save dialog; other formats still export it.
+#[test]
+fn art_a_plot_leaves_out_keeps_hpgl_export_as_open_before_the_save_dialog() {
+    let (mut app, _) = app(1);
+    app.services.pick_save = Some(Box::new(|_: &crate::FilePick| panic!("no save dialog without art the plot draws")));
+    app.run("select.all", json!({})).unwrap();
+    app.run("transparency.set", json!({"opacity": 0})).unwrap();
+    app.run("file.exportAs", json!({"format": "hpgl"})).unwrap();
+    assert!(confirm(&mut app).unwrap_err().contains("no visible art"));
+    assert_eq!(kind(&app), Some("exportAs"));
+    app.services.pick_save = Some(Box::new(|p: &crate::FilePick| Some(format!("/out/{}", p.name))));
+    set(&mut app, "format", json!("png"));
+    confirm(&mut app).unwrap();
+    assert_eq!(kind(&app), Some("pngOptions"));
+}
+
 #[test]
 fn pdf_artboards_continue_in_the_save_pdf_dialog() {
     let (mut app, written) = app(3);
@@ -245,7 +535,7 @@ fn pdf_artboards_continue_in_the_save_pdf_dialog() {
 /// format, each file holding that artboard's art (the ellipse is on artboard 1).
 #[test]
 fn export_as_writes_only_the_chosen_artboard_in_every_format() {
-    for (format, ellipse) in [("svg", "<path"), ("dxf", "HATCH"), ("pdf", ""), ("png", "")] {
+    for (format, ellipse) in [("svg", "<ellipse"), ("dxf", "HATCH"), ("pdf", ""), ("png", "")] {
         for (range, on) in [("1", true), ("3", false)] {
             let (mut app, written) = app(3);
             app.run("file.exportAs", json!({"format": format})).unwrap();
@@ -265,4 +555,52 @@ fn export_as_writes_only_the_chosen_artboard_in_every_format() {
             }
         }
     }
+}
+
+/// The Enter that closed the save panel, still held as the format's options open, doesn't write
+/// the file; Enter pressed again after it is let go does. So for every options dialog Export As
+/// opens after its panel, an exporter plug-in's included (as Save As's options).
+#[test]
+fn the_enter_that_closed_the_save_panel_does_not_confirm_the_options() {
+    let params = r#"{"speed":{"type":"number","min":1,"max":100,"default":40}}"#;
+    let module = wat::parse_str(vectorz_plugins::wat::returning(
+        &vectorz_plugins::wat::exporter("test.ui.held", r#"["tuh"]"#, params),
+        r#"{"dataBase64":"SGk="}"#,
+    ))
+    .unwrap();
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    let ctx = egui::Context::default();
+    theme::install_fonts(&ctx);
+    let frame = |app: &mut VectorzApp, events: Vec<egui::Event>| {
+        let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
+    };
+    // Each format whose options follow the panel (PDF's: Save PDF, with Use Artboards on or off).
+    let formats = [
+        ("png", false),
+        ("svg", false),
+        ("pdf", true),
+        ("pdf", false),
+        ("txt", false),
+        ("dxf", false),
+        ("eps", false),
+        ("plugin.test.ui.held", false),
+    ];
+    for (format, artboards) in formats {
+        let (mut app, written) = app(1);
+        app.run("plugin.install", json!({"dataBase64": vectorz_format::base64_encode(&module)})).unwrap();
+        app.run("file.exportAs", json!({"format": format})).unwrap();
+        set(&mut app, "useArtboards", json!(artboards));
+        confirm(&mut app).unwrap();
+        let options = kind(&app).map(str::to_string);
+        assert!(options.as_deref().is_some_and(|k| k != "exportAs"), "{format}: its options follow the panel, not {options:?}");
+        frame(&mut app, vec![enter(true)]);
+        assert_eq!(kind(&app).map(str::to_string), options, "{format}: the Enter still held isn't the options'");
+        assert!(written.borrow().is_empty(), "{format}: nothing written");
+        frame(&mut app, vec![enter(false)]);
+        frame(&mut app, vec![enter(true)]);
+        assert!(app.ui.dialog.is_none(), "{format}: Enter pressed again confirms");
+        assert!(!written.borrow().is_empty(), "{format}: and writes");
+    }
+    vectorz_plugins::registry::remove("test.ui.held");
 }

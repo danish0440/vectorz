@@ -28,6 +28,7 @@ pub fn open(app: &mut VectorzApp) -> Result<Value, String> {
     for (i, n) in names.iter().enumerate() {
         fields[format!("orig{i}")] = json!(n);
         fields[format!("name{i}")] = json!(n);
+        fields[format!("deleted{i}")] = json!(false);
     }
     app.ui.dialog = Some(Dialog::new(KIND, fields));
     Ok(Value::Null)
