@@ -3,7 +3,7 @@ name = "vectorz-metafile"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "VectorZ Windows metafiles: hand-written EMF and WMF writers and readers"
+description = "VectorZ metafiles: hand-written EMF and WMF writers, EMF, EMF+ and WMF import through craft-metafile, and a QuickDraw picture (PICT) reader"
 
 [lints]
 workspace = true
@@ -15,8 +15,10 @@ vectorz-doc = { workspace = true }
 vectorz-effects = { workspace = true }
 vectorz-brush = { workspace = true }
 vectorz-text = { workspace = true }
+craft-metafile = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
+craft-image-codecs = { workspace = true }
 
 [dev-dependencies]
 # The tests lay type out in the bundled fonts (the workspace leaves turning them on to the engine).
