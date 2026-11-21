@@ -1,11 +1,13 @@
 //! File → Place: the files picked, one line each about what they are, and the Place options row
-//! (Link, Template, Replace). OK places one file centred in the view (or in place of the selected
-//! object) or loads the place cursor with several ([`crate::place::confirm`]).
+//! (Link, Template, Replace, Show Import Options). OK places one file centred in the view (or in
+//! place of the selected object) or loads the place cursor with several ([`crate::place::confirm`]).
 //!
-//! Fields: `files` (`[{path} | {name}]`), `link`, `template`, `replace`, and `__replace` (one file
+//! Fields: `files` (`[{path} | {name}]`), `link`, `template`, `replace`, `showImportOptions` (each
+//! PDF, DXF or text file asks for its import options before it is placed), and `__replace` (one file
 //! and one selected object: Replace applies), `__documents` and `__others` (VectorZ documents
 //! from files are picked, other files are: what Link's tooltip explains), `__info` (a line per
-//! file).
+//! file; on the desktop the lines are read off the UI thread and are empty until they are read,
+//! [`crate::place::fill_lines`]).
 
 use serde_json::{Value, json};
 
@@ -28,13 +30,21 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
 };
 
 /// The options row: (field, label, tooltip).
-const OPTIONS: [(&str, &str, &str); 3] = [
+const OPTIONS: [(&str, &str, &str); 4] = [
     ("link", "Link", "Keep a link to an image file instead of only embedding it"),
     ("template", "Template", "Place onto a new locked, dimmed template layer below the current layer"),
     ("replace", "Replace", "Swap the selected object for the file, keeping its place and transform"),
+    (
+        "showImportOptions",
+        "Show Import Options",
+        "Ask for each PDF, DXF or text file's import options before placing it; off, use the options chosen last",
+    ),
 ];
 
-fn body(_: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
+    if crate::place::fill_lines(app, d) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
     let t = Tokens::get(ui.ctx());
     let files: Vec<Value> = d.fields.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
     let info = d.fields.get("__info").cloned().unwrap_or_default();
@@ -69,7 +79,7 @@ fn body(_: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     }
     ui.add_space(10.0);
     // The options row.
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
         for (key, label, tip) in OPTIONS {
             let on = d.bool(key);
