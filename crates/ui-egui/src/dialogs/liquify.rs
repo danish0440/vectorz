@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use vectorz_tools::distort::liquify::LiquifyKind;
 
 use super::document_setup::check;
-use super::{DialogSpec, form, run_and_close};
+use super::{DialogSpec, form, set_tool_options_and_close};
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::{VectorzApp, widgets};
@@ -87,15 +87,15 @@ fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
         });
     }
     widgets::label_row(ui, tl!("Angle:"), LABEL_W, |ui| {
-        if let Some(v) = widgets::plain_field(ui, "lq-angle", d.f64("angle", 0.0), "°", 1, 110.0) {
-            d.fields.insert("angle".into(), json!(v.clamp(-360.0, 360.0)));
+        if let Some(v) = widgets::range_field(ui, "lq-angle", d.f64("angle", 0.0), -360.0..=360.0, "°", 1, 110.0) {
+            d.fields.insert("angle".into(), json!(v));
         }
     });
     let pressure = d.bool("usePressure");
     widgets::label_row(ui, tl!("Intensity:"), LABEL_W, |ui| {
         ui.add_enabled_ui(!pressure, |ui| {
-            if let Some(v) = widgets::plain_field(ui, "lq-intensity", d.f64("intensity", 50.0), "%", 0, 110.0) {
-                d.fields.insert("intensity".into(), json!(v.clamp(1.0, 100.0)));
+            if let Some(v) = widgets::range_field(ui, "lq-intensity", d.f64("intensity", 50.0), 1.0..=100.0, "%", 0, 110.0) {
+                d.fields.insert("intensity".into(), json!(v));
             }
         });
     });
@@ -145,7 +145,7 @@ fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
             values.insert(key.into(), json!(d.f64(key, 0.0) / 100.0));
         }
     }
-    run_and_close(app, "tool.setOption", json!({ "tool": kind(d).id(), "values": values }))
+    set_tool_options_and_close(app, json!({ "tool": kind(d).id(), "values": values }))
 }
 
 #[cfg(test)]
