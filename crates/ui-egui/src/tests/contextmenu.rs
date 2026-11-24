@@ -1,0 +1,606 @@
+//! The canvas context menu: right-click selects the object under the pointer and lists what
+//! applies to the selection.
+
+use craft::menu::Node;
+use egui::{Event, PointerButton, Pos2, Rect, vec2};
+use serde_json::json;
+use vectorz_doc::{NodeId, NodeKind};
+use vectorz_engine::Session;
+use vectorz_geom::Point;
+
+use crate::{VectorzApp, canvas, menus};
+
+fn app() -> VectorzApp {
+    let mut app = VectorzApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app
+}
+
+fn rect(app: &mut VectorzApp, x: f64, y: f64) -> NodeId {
+    NodeId(app.run("shape.rectangle", json!({"x": x, "y": y, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap())
+}
+
+/// One headless frame of the canvas on an 800 × 600 window.
+fn frame(app: &mut VectorzApp, ctx: &egui::Context, events: Vec<Event>) {
+    let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), events, ..Default::default() };
+    let mut out = ctx.run_ui(raw, |ui| canvas::show(app, ui));
+    out.textures_delta.clear();
+}
+
+fn press(pos: Pos2, button: PointerButton, pressed: bool) -> Event {
+    Event::PointerButton { pos, button, pressed, modifiers: Default::default() }
+}
+
+/// Click `button` at `pos` (move, press, release, then a frame to show the result).
+fn click(app: &mut VectorzApp, ctx: &egui::Context, pos: Pos2, button: PointerButton) {
+    frame(app, ctx, vec![Event::PointerMoved(pos)]);
+    frame(app, ctx, vec![press(pos, button, true)]);
+    frame(app, ctx, vec![press(pos, button, false)]);
+    frame(app, ctx, vec![]);
+}
+
+/// Escape, which closes an open menu.
+fn escape(app: &mut VectorzApp, ctx: &egui::Context) {
+    frame(app, ctx, vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+}
+
+/// Where document point `(x, y)` is on screen (after a first frame laid the canvas out).
+fn screen(app: &VectorzApp, x: f64, y: f64) -> Pos2 {
+    app.canvas_view().unwrap().to_screen(Point::new(x, y))
+}
+
+/// The labels of the menu's rows, submenus and headings included, depth first. A spelling suggestion
+/// shows the word it puts in, not a label of the menu.
+fn labels(app: &VectorzApp) -> Vec<String> {
+    fn walk(nodes: &[Node], out: &mut Vec<String>) {
+        for n in nodes {
+            match n {
+                Node::Item(it) if it.command.id == "text.editRange" => {}
+                Node::Item(it) => out.push(it.label.clone()),
+                Node::Heading(l) => out.push(l.clone()),
+                Node::Submenu { label, children, .. } => {
+                    out.push(label.clone());
+                    walk(children, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(&menus::context_items(app), &mut out);
+    out
+}
+
+/// The command (id and params) of every row of the menu, depth first.
+fn commands(app: &VectorzApp) -> Vec<(String, serde_json::Value)> {
+    fn walk(nodes: &[Node], out: &mut Vec<(String, serde_json::Value)>) {
+        for n in nodes {
+            match n {
+                Node::Item(it) => out.push((it.command.id.clone(), it.command.params.clone())),
+                Node::Submenu { children, .. } => walk(children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(&menus::context_items(app), &mut out);
+    out
+}
+
+fn has(app: &VectorzApp, label: &str) -> bool {
+    labels(app).iter().any(|l| l == label)
+}
+
+fn has_command(app: &VectorzApp, id: &str) -> bool {
+    commands(app).iter().any(|(c, _)| c == id)
+}
+
+#[test]
+fn right_click_selects_the_object_and_lists_its_commands() {
+    let mut app = app();
+    let id = rect(&mut app, 50.0, 50.0);
+    app.run("select.none", json!({})).unwrap();
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.ui.context_menu_at.is_none() && !has(&app, "Arrange"));
+    let p = screen(&app, 100.0, 100.0);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert_eq!(app.session.active().unwrap().selection.objects, [id], "the object right-clicked is selected");
+    assert!(app.ui.context_menu_at.is_some(), "the menu is open");
+    for label in ["Cut", "Copy", "Make Guides", "Transform", "Arrange", "Select", "Export Selection…"] {
+        assert!(has(&app, label), "{label} in {:?}", labels(&app));
+    }
+    assert!(has_command(&app, "object.arrange.bringToFront"));
+    // Nothing that needs several objects, a group or nothing selected.
+    for label in ["Group", "Ungroup", "Make Clipping Mask", "Release Compound Path", "Select All", "Zoom In"] {
+        assert!(!has(&app, label), "{label} in {:?}", labels(&app));
+    }
+}
+
+#[test]
+fn right_click_on_empty_canvas_offers_the_view_and_selects_nothing() {
+    let mut app = app();
+    app.select_tool("rectangle");
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    let p = screen(&app, 300.0, 250.0);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.session.active().unwrap().selection.objects.is_empty());
+    for label in ["Zoom In", "Zoom Out", "Fit Artboard in Window", "Show Rulers", "Select All"] {
+        assert!(has(&app, label), "{label} in {:?}", labels(&app));
+    }
+    assert!(!has(&app, "Cut") && !has(&app, "Arrange"));
+    // The secondary press starts no drag of the Rectangle tool.
+    assert_eq!(app.session.active().unwrap().doc.art_bounds(), None);
+}
+
+/// A right-click over a locked object adds an Unlock submenu that lists the object by its name; once
+/// the menu is closed, the menu lists no Unlock items.
+#[test]
+fn right_click_on_a_locked_object_offers_unlock_by_its_name() {
+    let mut app = app();
+    let id = rect(&mut app, 50.0, 50.0);
+    app.run("layer.setProps", json!({"ids": [id.0], "name": "Sky", "locked": true})).unwrap();
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    let p = screen(&app, 100.0, 100.0);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert_eq!(app.ui.context_locked, Some((app.session.active().unwrap().uid, vec![id])), "the locked object under the pointer");
+    assert!(has(&app, "Unlock"), "{:?}", labels(&app));
+    // Agents see the item under the Unlock path, by the object's name.
+    let entries = menus::context_entries(&app);
+    let item = entries.iter().find(|e| e.path == ["Unlock"]).unwrap();
+    assert_eq!((item.label.as_str(), item.command.as_deref()), ("Sky", Some("layer.setProps")));
+    assert_eq!(item.params, json!({"ids": [id.0], "locked": false}));
+    escape(&mut app, &ctx);
+    assert!(app.ui.context_locked.is_none(), "closing the menu forgets it");
+    assert!(app.ui.context_menu_at.is_none());
+    assert!(!has(&app, "Unlock"));
+}
+
+/// Cmd+Alt+Shift+U is Switch Units by default: pressed, the document goes to the unit after its own in
+/// the ruler's menu (wrapping from Feet to Points), and Smart Guides (Cmd+U) stay as they are.
+#[test]
+fn cmd_alt_shift_u_switches_to_the_next_unit() {
+    use vectorz_doc::Unit;
+    let mut app = app();
+    crate::tests_synthetic::key_frame(&mut app, &crate::testing::ui_context(), vec![]);
+    assert_eq!(app.run("shortcuts.conflicts", json!({})).unwrap(), json!([]), "no other default has the key");
+    fn press(app: &mut VectorzApp) {
+        let ctx = crate::testing::ui_context();
+        crate::tests_synthetic::key_frame(app, &ctx, vec![]);
+        let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::ALT | egui::Modifiers::SHIFT;
+        let ev = Event::Key { key: egui::Key::U, physical_key: None, pressed: true, repeat: false, modifiers };
+        crate::tests_synthetic::key_frame(app, &ctx, vec![ev]);
+    }
+    let guides = app.ui.view.smart_guides;
+    press(&mut app);
+    assert_eq!(app.session.general_unit(), Unit::Picas, "Points → Picas");
+    assert_eq!(app.ui.view.smart_guides, guides, "Smart Guides stay as they are");
+    app.run("document.setUnits", json!({"units": "Feet"})).unwrap();
+    press(&mut app);
+    assert_eq!(app.session.general_unit(), Unit::Points, "Feet → Points");
+}
+
+#[test]
+fn the_menu_follows_the_selection() {
+    let mut app = app();
+    let (a, b) = (rect(&mut app, 0.0, 0.0), rect(&mut app, 50.0, 50.0));
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    for label in ["Group", "Join", "Make Clipping Mask", "Make Compound Path", "Objects on Path", "Bring to Front", "Move…"] {
+        assert!(has(&app, label), "{label} in {:?}", labels(&app));
+    }
+    assert!(!has(&app, "Ungroup") && !has(&app, "Isolate Selected Group"));
+    app.run("object.group", json!({})).unwrap();
+    assert!(has(&app, "Ungroup") && has(&app, "Isolate Selected Group"));
+    assert!(!has(&app, "Group") && !has(&app, "Join"));
+    // Isolated: a way out.
+    app.run("object.isolate", json!({})).unwrap();
+    assert!(has_command(&app, "object.exitIsolation"));
+    // Agents see the same menu, with submenus as paths.
+    let entries = menus::context_entries(&app);
+    assert!(entries.iter().any(|e| e.command.as_deref() == Some("object.exitIsolation") && e.enabled));
+    app.run("select.set", json!({"ids": [a.0]})).unwrap();
+    let entries = menus::context_entries(&app);
+    let front = entries.iter().find(|e| e.command.as_deref() == Some("object.arrange.bringToFront")).unwrap();
+    assert_eq!(front.path, ["Arrange"]);
+    // No separator leads, trails or doubles up.
+    let nodes = menus::context_items(&app);
+    assert!(!matches!(nodes.first(), Some(Node::Separator)) && !matches!(nodes.last(), Some(Node::Separator)));
+    assert!(nodes.windows(2).all(|w| !matches!(w, [Node::Separator, Node::Separator])));
+}
+
+/// The labels of the context menu's isolation items.
+fn isolate_labels(app: &VectorzApp) -> Vec<String> {
+    labels(app).into_iter().filter(|l| l.starts_with("Isolate Selected")).collect()
+}
+
+/// One selected path has Isolate Selected Path, which isolates that path.
+#[test]
+fn single_path_context_item_enters_isolation() {
+    let mut app = app();
+    let a = rect(&mut app, 0.0, 0.0);
+    app.run("select.set", json!({"ids": [a.0]})).unwrap();
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Path"]);
+    assert!(has_command(&app, "object.isolate"));
+    app.run("object.isolate", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().isolation, Some(a), "the path is isolated");
+    assert!(has_command(&app, "object.exitIsolation"));
+}
+
+/// The isolation item names the kind of the one selected object: a group or a compound path is a
+/// group, a path (a group's member too) is a path, and no object or two objects have neither.
+#[test]
+fn isolation_context_item_follows_selected_kind() {
+    let mut app = app();
+    let (a, b) = (rect(&mut app, 0.0, 0.0), rect(&mut app, 50.0, 50.0));
+    app.run("select.none", json!({})).unwrap();
+    assert!(isolate_labels(&app).is_empty(), "nothing selected");
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    assert!(isolate_labels(&app).is_empty(), "two paths");
+    app.run("object.compoundPath.make", json!({})).unwrap();
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Group"], "a compound path selected whole");
+    let compound = app.session.active().unwrap().selection.objects.clone();
+    app.run("select.set", json!({"ids": [a.0]})).unwrap();
+    assert_eq!(app.session.active().unwrap().selection.objects, [a], "a compound path's member selected on its own");
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Path"], "a path in a compound path");
+    app.run("select.set", json!({"ids": [compound[0].0]})).unwrap();
+    app.run("object.compoundPath.release", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    app.run("object.group", json!({})).unwrap();
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Group"], "a group");
+    app.run("select.set", json!({"ids": [a.0]})).unwrap();
+    assert_eq!(app.session.active().unwrap().selection.objects, [a], "a member selected on its own");
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Path"], "a path in a group");
+    app.run("object.isolate", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().isolation, Some(a), "the member is isolated");
+}
+
+/// Neither isolation item shows for an object `object.isolate` refuses, which a selection set by a
+/// command can still hold: a hidden or locked object, a path in a locked group, and a guide while
+/// guides are locked.
+#[test]
+fn isolation_context_item_skips_objects_that_cannot_be_isolated() {
+    let mut app = app();
+    let (a, b) = (rect(&mut app, 0.0, 0.0), rect(&mut app, 50.0, 50.0));
+    let set = |app: &mut VectorzApp, id: NodeId, f: fn(&mut vectorz_doc::Node)| {
+        let st = app.session.doc_mut().unwrap();
+        f(std::sync::Arc::make_mut(&mut st.doc).node_mut(id).unwrap());
+        st.selection.set([id]);
+    };
+    set(&mut app, a, |n| n.locked = true);
+    assert!(isolate_labels(&app).is_empty(), "a locked path");
+    set(&mut app, a, |n| {
+        n.locked = false;
+        n.visible = false;
+    });
+    assert!(isolate_labels(&app).is_empty(), "a hidden path");
+    set(&mut app, a, |n| n.visible = true);
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Path"]);
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    app.run("object.group", json!({})).unwrap();
+    let g = app.session.active().unwrap().selection.objects[0];
+    set(&mut app, g, |n| n.locked = true);
+    assert!(isolate_labels(&app).is_empty(), "a locked group");
+    app.session.doc_mut().unwrap().selection.set([a]);
+    assert!(isolate_labels(&app).is_empty(), "a path in a locked group");
+    set(&mut app, g, |n| n.locked = false);
+    app.run("object.ungroup", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [a.0]})).unwrap();
+    app.run("view.guides.make", json!({})).unwrap();
+    app.run("view.guides.lock", json!({})).unwrap();
+    assert!(app.session.guides_locked());
+    app.session.doc_mut().unwrap().selection.set([a]);
+    assert!(isolate_labels(&app).is_empty(), "a guide while guides are locked");
+}
+
+/// While a symbol is edited, a path in the symbol's art has Isolate Selected Path, and a path
+/// outside it, which a selection set by a command can still hold, has no isolation item.
+#[test]
+fn isolation_context_item_skips_objects_outside_the_edited_symbol() {
+    let mut app = app();
+    let outside = rect(&mut app, 0.0, 0.0);
+    rect(&mut app, 200.0, 0.0);
+    app.run("symbol.new", json!({"name": "Box"})).unwrap();
+    app.run("symbol.edit", json!({"name": "Box"})).unwrap();
+    assert!(app.session.active().unwrap().doc.symbol_edit.is_some(), "symbol editing mode");
+    let inside = rect(&mut app, 100.0, 100.0);
+    app.session.doc_mut().unwrap().selection.set([inside]);
+    assert_eq!(isolate_labels(&app), ["Isolate Selected Path"], "a path in the symbol's art");
+    app.session.doc_mut().unwrap().selection.set([outside]);
+    assert!(isolate_labels(&app).is_empty(), "a path outside the symbol's art");
+    assert!(app.run("object.isolate", json!({"id": outside.0})).is_err(), "object.isolate refuses it");
+}
+
+/// Simplify… and Smooth… are listed while the selection holds a path: a path, a group of paths, a
+/// compound path, a path with type, and anchors selected with Direct Selection (whose Remove
+/// Anchor Points stays). They are left out with nothing, only type or a group of type selected.
+#[test]
+fn simplify_and_smooth_follow_the_selections_paths() {
+    let mut app = app();
+    let (a, b) = (rect(&mut app, 0.0, 0.0), rect(&mut app, 150.0, 0.0));
+    let t = NodeId(app.run("text.create", json!({"x": 10, "y": 250, "text": "Type"})).unwrap()["id"].as_u64().unwrap());
+    // Both or neither, never one without the other.
+    let smooth = |app: &VectorzApp| {
+        let (simplify, smooth) = (has(app, "Simplify…"), has(app, "Smooth…"));
+        assert_eq!(simplify, smooth, "Simplify… and Smooth… follow the same rule: {:?}", labels(app));
+        smooth
+    };
+    app.run("select.none", json!({})).unwrap();
+    assert!(!smooth(&app), "nothing selected");
+    app.run("select.set", json!({"ids": [t.0]})).unwrap();
+    assert!(!smooth(&app), "only type selected");
+    let u = NodeId(app.run("text.create", json!({"x": 10, "y": 300, "text": "More"})).unwrap()["id"].as_u64().unwrap());
+    app.run("select.set", json!({"ids": [t.0, u.0]})).unwrap();
+    app.run("object.group", json!({})).unwrap();
+    assert!(!smooth(&app), "a group of type only");
+    app.run("object.ungroup", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [a.0]})).unwrap();
+    assert!(smooth(&app), "a path");
+    app.run("select.set", json!({"ids": [a.0, t.0]})).unwrap();
+    assert!(smooth(&app), "a path and type");
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    app.run("object.group", json!({})).unwrap();
+    assert!(smooth(&app), "a group of paths");
+    app.run("object.ungroup", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    app.run("object.compoundPath.make", json!({})).unwrap();
+    assert!(smooth(&app), "a compound path");
+    app.run("object.compoundPath.release", json!({})).unwrap();
+    app.select_tool("directSelection");
+    app.run("select.anchors", json!({"id": a.0, "anchors": [[0, 1]]})).unwrap();
+    assert!(smooth(&app), "an anchor point direct-selected");
+    assert!(has(&app, "Remove Anchor Points"), "the anchor entries stay");
+}
+
+/// Selected type has Bullets and Numbering › Apply Bullets in the context menu and the Type menu,
+/// which makes its paragraphs a bulleted list; other art has no such item.
+#[test]
+fn selected_type_has_apply_bullets() {
+    let mut app = app();
+    let r = rect(&mut app, 0.0, 0.0);
+    app.run("select.set", json!({"ids": [r.0]})).unwrap();
+    let bullets = |app: &VectorzApp| menus::context_entries(app).into_iter().find(|e| e.command.as_deref() == Some("type.applyBullets"));
+    assert!(bullets(&app).is_none(), "a rectangle has no paragraphs");
+    let t = NodeId(app.run("text.create", json!({"x": 10, "y": 200, "text": "Item"})).unwrap()["id"].as_u64().unwrap());
+    app.run("select.set", json!({"ids": [t.0]})).unwrap();
+    let e = bullets(&app).expect("Apply Bullets");
+    assert_eq!((e.path.as_slice(), e.label.as_str(), e.enabled), (&["Bullets and Numbering".to_string()][..], "Apply Bullets", true));
+    let typed = menus::menu_entries(&app).into_iter().find(|e| e.command.as_deref() == Some("type.applyBullets")).expect("in the Type menu");
+    assert_eq!(typed.path, ["Type", "Bullets and Numbering"]);
+    menus::invoke(&mut app, "type.applyBullets", json!({}));
+    let Some(NodeKind::Text(text)) = app.session.active().unwrap().doc.node(t).map(|n| &n.kind) else { panic!("text") };
+    assert!(text.para_at(0).list.is_some());
+}
+
+/// Selected type has Bullets and Numbering › Apply Numbers in the context menu and the Type menu,
+/// after Apply Bullets, which makes its paragraphs a numbered list; other art has no such item.
+#[test]
+fn selected_type_has_apply_numbers() {
+    let mut app = app();
+    let r = rect(&mut app, 0.0, 0.0);
+    app.run("select.set", json!({"ids": [r.0]})).unwrap();
+    let numbers = |app: &VectorzApp| menus::context_entries(app).into_iter().position(|e| e.command.as_deref() == Some("type.applyNumbers"));
+    assert!(numbers(&app).is_none(), "a rectangle has no paragraphs");
+    let t = NodeId(app.run("text.create", json!({"x": 10, "y": 200, "text": "Item"})).unwrap()["id"].as_u64().unwrap());
+    app.run("select.set", json!({"ids": [t.0]})).unwrap();
+    let entries = menus::context_entries(&app);
+    let at = numbers(&app).expect("Apply Numbers");
+    let e = &entries[at];
+    assert_eq!((e.path.as_slice(), e.label.as_str(), e.enabled), (&["Bullets and Numbering".to_string()][..], "Apply Numbers", true));
+    assert_eq!(entries.get(at.wrapping_sub(1)).and_then(|e| e.command.as_deref()), Some("type.applyBullets"));
+    let typed = menus::menu_entries(&app).into_iter().find(|e| e.command.as_deref() == Some("type.applyNumbers")).expect("in the Type menu");
+    assert_eq!(typed.path, ["Type", "Bullets and Numbering"]);
+    menus::invoke(&mut app, "type.applyNumbers", json!({}));
+    let Some(NodeKind::Text(text)) = app.session.active().unwrap().doc.node(t).map(|n| &n.kind) else { panic!("text") };
+    assert_eq!(text.para_at(0).list.and_then(|l| l.number), Some(vectorz_doc::text::NumberStyle::Arabic));
+}
+
+/// With the Intertwine tool, a right-click where three or more objects of the group overlap lists
+/// Bring to Front, Bring Forward, Send Backward and Send to Back for the object nearest to the
+/// pointer in place of the Arrange submenu. Elsewhere the menu is the usual one.
+#[test]
+fn right_click_where_three_intertwined_objects_overlap_arranges_the_nearest_one() {
+    let mut app = app();
+    // Rectangles from x = 50, 90 and 130, 120 wide: all three overlap from x = 130 to 170.
+    let wide = |app: &mut VectorzApp, x: f64| {
+        NodeId(app.run("shape.rectangle", json!({"x": x, "y": 50, "width": 120, "height": 100})).unwrap()["id"].as_u64().unwrap())
+    };
+    let (a, b, c) = (wide(&mut app, 50.0), wide(&mut app, 90.0), wide(&mut app, 130.0));
+    app.run("select.set", json!({"ids": [a.0, b.0, c.0]})).unwrap();
+    let g = NodeId(app.run("object.intertwine.make", json!({})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(app.session.tool_id(), "intertwine");
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    // By the right edge of A (the first rectangle), where all three overlap.
+    let p = screen(&app, 169.0, 100.0);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert_eq!(app.session.active().unwrap().selection.objects, [g], "the selection stays the group");
+    assert!(app.ui.context_intertwine.is_some());
+    assert!(!has(&app, "Arrange"), "no Arrange submenu: {:?}", labels(&app));
+    let arrange: Vec<_> = commands(&app).into_iter().filter(|(id, _)| id == "object.intertwine.arrange").collect();
+    let orders: Vec<_> = arrange.iter().map(|(_, params)| (params["id"].clone(), params["order"].clone(), params["member"].clone())).collect();
+    let want: Vec<_> = ["front", "forward", "backward", "back"].iter().map(|o| (json!(g.0), json!(o), json!(a.0))).collect();
+    assert_eq!(orders, want, "the four orders for the nearest member, in that order");
+    // Where only two overlap, the menu is the usual one.
+    escape(&mut app, &ctx);
+    let p = screen(&app, 110.0, 100.0);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_intertwine.is_none());
+    assert!(has(&app, "Arrange") && !has_command(&app, "object.intertwine.arrange"), "{:?}", labels(&app));
+}
+
+/// Every label the context menu can show is a menu string, so complete catalogs must translate it.
+#[test]
+fn every_context_label_is_a_menu_string() {
+    let strings = menus::menu_strings();
+    let mut app = app();
+    let mut shown = vec![];
+    // Nothing selected, one path, two paths, a group, a clipping group, a compound path, isolation.
+    shown.extend(labels(&app));
+    let (a, b) = (rect(&mut app, 0.0, 0.0), rect(&mut app, 50.0, 50.0));
+    shown.extend(labels(&app));
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    shown.extend(labels(&app));
+    app.run("object.compoundPath.make", json!({})).unwrap();
+    shown.extend(labels(&app));
+    app.run("object.compoundPath.release", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [a.0, b.0]})).unwrap();
+    app.run("object.clippingMask.make", json!({})).unwrap();
+    shown.extend(labels(&app));
+    app.run("object.group", json!({})).unwrap();
+    shown.extend(labels(&app));
+    app.run("object.isolate", json!({})).unwrap();
+    shown.extend(labels(&app));
+    // The Unlock submenu that a right-click over a locked object adds.
+    app.run("object.exitIsolation", json!({})).unwrap();
+    app.run("layer.setProps", json!({"ids": [a.0], "locked": true})).unwrap();
+    app.ui.context_locked = Some((app.session.active().unwrap().uid, vec![a]));
+    shown.extend(labels(&app));
+    // A word Auto Spell Check underlined, with no suggestions: Ignore All, Add to Dictionary.
+    let text = NodeId(app.run("text.create", json!({"x": 10, "y": 200, "text": "Zqxvbtkw"})).unwrap()["id"].as_u64().unwrap());
+    app.ui.context_spelling = Some(crate::state::ContextSpelling {
+        uid: app.session.active().unwrap().uid,
+        id: text,
+        start: 0,
+        end: 8,
+        word: "Zqxvbtkw".into(),
+        suggestions: vec![],
+    });
+    shown.extend(labels(&app));
+    app.ui.context_spelling = None;
+    // The Lock Artboards and Unlock Artboards submenus of the Artboard tool.
+    app.run("artboard.new", json!({"x": 400, "y": 0, "width": 100, "height": 80})).unwrap();
+    app.run("artboard.setProps", json!({"index": 0, "locked": true})).unwrap();
+    app.select_tool("artboard");
+    shown.extend(labels(&app));
+    // Lock Selected with the artboard that isn't locked active.
+    crate::panels::artboards::select(&mut app, 1);
+    shown.extend(labels(&app));
+    let missing: Vec<_> = shown.iter().filter(|l| !strings.contains(l.as_str())).collect();
+    assert!(missing.is_empty(), "context menu labels missing from menu_strings: {missing:?}");
+    for label in menus::CONTEXT_LABELS {
+        assert!(shown.iter().any(|s| s == *label), "`{label}` is listed but the context menu never shows it");
+    }
+}
+
+/// Point type holding `t` at (20, 60), with Auto Spell Check on.
+fn spelled(app: &mut VectorzApp, t: &str) -> NodeId {
+    let id = NodeId(app.run("text.create", json!({"x": 20, "y": 60, "text": t, "size": 24})).unwrap()["id"].as_u64().unwrap());
+    app.run("select.none", json!({})).unwrap();
+    app.run("edit.autoSpellCheck", json!({})).unwrap();
+    id
+}
+
+/// Where on screen the middle of bytes `a..b` of type object `id` is.
+fn word_at(app: &VectorzApp, id: NodeId, a: usize, b: usize) -> Pos2 {
+    let st = app.session.active().unwrap();
+    let Some(NodeKind::Text(t)) = st.doc.node(id).map(|n| &n.kind) else { panic!("type") };
+    let lay = vectorz_text::layout(vectorz_text::FontDb::global(), t);
+    let q = vectorz_text::selection_quads(&lay, a, b)[0].map(|c| t.xf * c);
+    let c = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);
+    screen(app, c.x, c.y)
+}
+
+/// With Auto Spell Check on, right-clicking an underlined word holds the word, its range and what the
+/// dictionary suggests, which lead the menu, then Ignore All and Add to Dictionary; the type's
+/// Spelling submenu has Check Spelling… as well.
+#[test]
+fn right_click_on_an_underlined_word_offers_its_suggestions() {
+    let mut app = app();
+    let id = spelled(&mut app, "the speling cat");
+    let want: Vec<String> = app.session.execute("text.spelling.suggest", &json!({"word": "speling"})).unwrap()["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap().to_string())
+        .collect();
+    assert!(!want.is_empty(), "the dictionary has suggestions for `speling`");
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    let p = word_at(&app, id, 4, 11);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    let w = app.ui.context_spelling.clone().expect("the word right-clicked");
+    assert_eq!((w.id, w.start, w.end, w.word.as_str()), (id, 4, 11, "speling"));
+    assert_eq!(w.suggestions, want, "the dictionary's suggestions, in order");
+    assert!(has(&app, "Ignore All") && has(&app, "Add to Dictionary"), "{:?}", labels(&app));
+    // Agents see them at the top of the menu, a suggestion by its word.
+    let entries = menus::context_entries(&app);
+    assert_eq!((entries[0].label.as_str(), entries[0].command.as_deref()), (want[0].as_str(), Some("text.editRange")));
+    let check = entries.into_iter().find(|e| e.command.as_deref() == Some(crate::dialogs::check_spelling::COMMAND));
+    assert_eq!(check.map(|e| e.path), Some(vec!["Spelling".to_string()]), "Spelling › Check Spelling…");
+}
+
+/// With Auto Spell Check off, or on a word that is right, a right-click holds no spelling word.
+#[test]
+fn no_spelling_items_off_a_misspelled_word_or_with_auto_spell_check_off() {
+    let mut app = app();
+    let id = spelled(&mut app, "the Vqzxtrwk");
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    let p = word_at(&app, id, 0, 3);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_none(), "a right word");
+    escape(&mut app, &ctx);
+    let p = word_at(&app, id, 4, 12);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_some(), "on, the wrong word is held");
+    escape(&mut app, &ctx);
+    app.run("edit.autoSpellCheck", json!({})).unwrap();
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_none(), "off");
+}
+
+/// A right word in type on top of an underlined word in other type: the right-click is on the
+/// top type, so no spelling word is held for the word under it.
+#[test]
+fn a_word_under_other_type_is_not_the_one_right_clicked() {
+    let mut app = app();
+    let under = spelled(&mut app, "Qzvxtrwk");
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    let p = word_at(&app, under, 0, 8);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_some(), "alone, the word is held");
+    escape(&mut app, &ctx);
+    app.run("text.create", json!({"x": 20, "y": 60, "text": "the cat sat on the mat", "size": 24})).unwrap();
+    app.run("select.none", json!({})).unwrap();
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_none(), "under right type");
+}
+
+/// In an Intertwine group, the type drawn on top at the right-click is the one whose word is
+/// held: a member brought to the front there, though earlier in the stacking order.
+#[test]
+fn in_an_intertwine_group_the_type_drawn_on_top_is_the_one_right_clicked() {
+    let mut app = app();
+    let under = spelled(&mut app, "Qzvxtrwk");
+    let over =
+        NodeId(app.run("text.create", json!({"x": 20, "y": 60, "text": "the cat sat on the mat", "size": 24})).unwrap()["id"].as_u64().unwrap());
+    app.run("select.set", json!({"ids": [under.0, over.0]})).unwrap();
+    let g = NodeId(app.run("object.intertwine.make", json!({})).unwrap()["id"].as_u64().unwrap());
+    app.select_tool("selection");
+    app.run("select.none", json!({})).unwrap();
+    let ctx = crate::testing::ui_context();
+    frame(&mut app, &ctx, vec![]);
+    // A point on the word where glyphs of both overlap: Intertwine's areas follow the outlines.
+    let quad = {
+        let st = app.session.active().unwrap();
+        let Some(NodeKind::Text(t)) = st.doc.node(under).map(|n| &n.kind) else { panic!("type") };
+        let lay = vectorz_text::layout(vectorz_text::FontDb::global(), t);
+        vectorz_text::selection_quads(&lay, 0, 8)[0].map(|c| t.xf * c)
+    };
+    let (x0, x1) = (quad.iter().map(|c| c.x).fold(f64::MAX, f64::min), quad.iter().map(|c| c.x).fold(f64::MIN, f64::max));
+    let (y0, y1) = (quad.iter().map(|c| c.y).fold(f64::MAX, f64::min), quad.iter().map(|c| c.y).fold(f64::MIN, f64::max));
+    let overlap = (0..40)
+        .flat_map(|i| (0..20).map(move |j| Point::new(x0 + (x1 - x0) * (i as f64 + 0.5) / 40.0, y0 + (y1 - y0) * (j as f64 + 0.5) / 20.0)))
+        .find(|q| app.run("object.intertwine.arrange", json!({"id": g.0, "at": [q.x, q.y], "order": "back", "member": under.0})).is_ok())
+        .expect("glyphs of both overlap somewhere on the word");
+    let p = screen(&app, overlap.x, overlap.y);
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_none(), "under the right type");
+    escape(&mut app, &ctx);
+    app.run("object.intertwine.arrange", json!({"id": g.0, "at": [overlap.x, overlap.y], "order": "front", "member": under.0})).unwrap();
+    click(&mut app, &ctx, p, PointerButton::Secondary);
+    assert!(app.ui.context_spelling.is_some(), "brought to the front there");
+}

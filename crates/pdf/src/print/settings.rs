@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use vectorz_color::cms::{self, Intent, ProfileKind};
 
-use crate::settings::{choice, within};
+use crate::settings::{Choice, choice, within};
 use crate::{BleedSettings, MarkSettings, PdfError};
 
 choice! {
@@ -19,20 +19,41 @@ choice! {
     } default All
 }
 
-choice! {
-    /// The paper (portrait sizes; [`Media::Custom`] is [`PrintSettings::width`] ×
-    /// [`PrintSettings::height`]).
-    Media {
-        Letter = "letter", "Letter";
-        Legal = "legal", "Legal";
-        Tabloid = "tabloid", "Tabloid";
-        A3 = "a3", "A3";
-        A4 = "a4", "A4";
-        A5 = "a5", "A5";
-        B4 = "b4", "B4";
-        B5 = "b5", "B5";
-        Custom = "custom", "Custom";
-    } default Letter
+/// The paper (portrait sizes; [`Media::Custom`] is [`PrintSettings::width`] ×
+/// [`PrintSettings::height`]).
+///
+/// `B4` and `B5` keep their ISO 216 dimensions (250 × 353 mm and 176 × 250 mm) so settings saved
+/// before the Japanese papers existed keep their paper, and their dialogs say "(ISO)". Japanese
+/// printing uses the JIS sizes, which are separate choices: `b4 (jis)` 257 × 364 mm, `b5 (jis)`
+/// 182 × 257 mm and `b6 (jis)` 128 × 182 mm. The other Japanese papers are はがき
+/// (`japanese postcard`, 100 × 148 mm), 往復はがき (`japanese double postcard`, 148 × 200 mm),
+/// 封筒 長形3号/長形4号/角形2号/角形3号 and 四六判 (`yonroku-ban`, 127 × 188 mm).
+///
+/// Written out rather than through the `choice!` macro because a paper also comes from a person:
+/// [`Media::from_name`] accepts a JSON id or a dialog label, any case and spacing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Media {
+    #[default]
+    Letter,
+    Legal,
+    Tabloid,
+    A3,
+    A4,
+    A5,
+    B4,
+    B5,
+    A6,
+    B4Jis,
+    B5Jis,
+    B6Jis,
+    JapanesePostcard,
+    JapaneseDoublePostcard,
+    JapaneseEnvelope3,
+    JapaneseEnvelope4,
+    Kaku2,
+    Kaku3,
+    YonrokuBan,
+    Custom,
 }
 
 impl Media {
@@ -46,10 +67,132 @@ impl Media {
             Self::A3 => mm(297.0, 420.0),
             Self::A4 => mm(210.0, 297.0),
             Self::A5 => mm(148.0, 210.0),
+            Self::A6 => mm(105.0, 148.0),
+            // ISO 216.
             Self::B4 => mm(250.0, 353.0),
             Self::B5 => mm(176.0, 250.0),
+            // JIS B (JIS X 6310): the Japanese B sizes print a little larger than ISO's.
+            Self::B4Jis => mm(257.0, 364.0),
+            Self::B5Jis => mm(182.0, 257.0),
+            Self::B6Jis => mm(128.0, 182.0),
+            // はがき, 往復はがき, 封筒 長形3号/長形4号, 角形2号/角形3号, 四六判.
+            Self::JapanesePostcard => mm(100.0, 148.0),
+            Self::JapaneseDoublePostcard => mm(148.0, 200.0),
+            Self::JapaneseEnvelope3 => mm(120.0, 235.0),
+            Self::JapaneseEnvelope4 => mm(90.0, 225.0),
+            Self::Kaku2 => mm(240.0, 332.0),
+            Self::Kaku3 => mm(216.0, 277.0),
+            Self::YonrokuBan => mm(127.0, 188.0),
             Self::Custom => None,
         }
+    }
+
+    /// The paper an id or a dialog label names, ignoring case and anything but letters and digits:
+    /// `"b5 (jis)"`, `"B5 (JIS)"` and `"b5jis"` all mean [`Media::B5Jis`], and `"b5"` stays the ISO
+    /// size that settings and presets already use. `None` for a name that is no paper.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let norm = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
+        let n = norm(name);
+        if n.is_empty() {
+            return None;
+        }
+        let at = |names: &'static [&'static str]| names.iter().position(|name| norm(name) == n);
+        at(Self::IDS).or_else(|| at(Self::LABELS)).and_then(|i| Self::ALL.get(i).copied())
+    }
+}
+
+impl Choice for Media {
+    const ALL: &'static [Self] = &[
+        Self::Letter,
+        Self::Legal,
+        Self::Tabloid,
+        Self::A3,
+        Self::A4,
+        Self::A5,
+        Self::B4,
+        Self::B5,
+        Self::A6,
+        Self::B4Jis,
+        Self::B5Jis,
+        Self::B6Jis,
+        Self::JapanesePostcard,
+        Self::JapaneseDoublePostcard,
+        Self::JapaneseEnvelope3,
+        Self::JapaneseEnvelope4,
+        Self::Kaku2,
+        Self::Kaku3,
+        Self::YonrokuBan,
+        Self::Custom,
+    ];
+    const IDS: &'static [&'static str] = &[
+        "letter",
+        "legal",
+        "tabloid",
+        "a3",
+        "a4",
+        "a5",
+        "b4",
+        "b5",
+        "a6",
+        "b4 (jis)",
+        "b5 (jis)",
+        "b6 (jis)",
+        "japanese postcard",
+        "japanese double postcard",
+        "japanese envelope #3",
+        "japanese envelope #4",
+        "kaku #2",
+        "kaku #3",
+        "yonroku-ban",
+        "custom",
+    ];
+    const LABELS: &'static [&'static str] = &[
+        "Letter",
+        "Legal",
+        "Tabloid",
+        "A3",
+        "A4",
+        "A5",
+        "B4 (ISO)",
+        "B5 (ISO)",
+        "A6",
+        "B4 (JIS)",
+        "B5 (JIS)",
+        "B6 (JIS)",
+        "Japanese Postcard",
+        "Japanese Double Postcard",
+        "Japanese Envelope #3",
+        "Japanese Envelope #4",
+        "Kaku #2",
+        "Kaku #3",
+        "Yonroku-ban",
+        "Custom",
+    ];
+}
+
+impl Media {
+    /// The label shown in the Print dialogs.
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().position(|m| *m == self).and_then(|i| Self::LABELS.get(i)).copied().unwrap_or_default()
+    }
+
+    /// The JSON id.
+    pub fn id(self) -> &'static str {
+        Self::ALL.iter().position(|m| *m == self).and_then(|i| Self::IDS.get(i)).copied().unwrap_or_default()
+    }
+}
+
+impl Serialize for Media {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for Media {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let name = String::deserialize(deserializer)?;
+        Self::from_name(&name).ok_or_else(|| D::Error::custom(format!("unknown paper `{name}` ({})", Self::IDS.join("|"))))
     }
 }
 
@@ -206,6 +349,11 @@ pub struct PrintSettings {
     pub overlap: f64,
     /// 1-based tiles to print (`"1-3, 5"`, numbered across then down); empty: every tile.
     pub tile_range: String,
+    /// Print as many copies of the artboard as fit the imageable area on each sheet, in a grid
+    /// (not when tiling).
+    pub copies_per_sheet: bool,
+    /// The space between copies on a sheet (pt).
+    pub gutter: f64,
     /// The device's unprintable margin around the paper (pt): the imageable area is inside it.
     pub margin: f64,
     // Marks and Bleed.
@@ -241,6 +389,8 @@ impl Default for PrintSettings {
             scale: PrintScale::default(),
             overlap: 0.0,
             tile_range: String::new(),
+            copies_per_sheet: false,
+            gutter: 0.0,
             margin: 0.0,
             marks: MarkSettings::default(),
             // The document's bleed (Document Setup) unless other values are given.
@@ -270,11 +420,15 @@ pub struct Placement {
 pub struct PrintScale {
     pub width: f64,
     pub height: f64,
+    /// The link between the width and the height: on, both are the same percentage. On for new
+    /// settings; a saved scale without it reads as off, so its width and height stay as saved.
+    #[serde(default)]
+    pub linked: bool,
 }
 
 impl Default for PrintScale {
     fn default() -> Self {
-        Self { width: 100.0, height: 100.0 }
+        Self { width: 100.0, height: 100.0, linked: true }
     }
 }
 
@@ -287,6 +441,9 @@ pub struct PrintOutput {
     pub image: PrintImage,
     /// Separate spot colours into process inks: no spot plates.
     pub spots_to_process: bool,
+    /// Separations: solid 100% black fills and strokes overprint, the characters' too, in the
+    /// printed copy only ([`super::printed_document`]). Composite output leaves it unused.
+    pub overprint_black: bool,
     /// Per-ink options, by ink name; inks not listed print with their defaults.
     pub inks: Vec<InkSettings>,
 }
@@ -305,15 +462,21 @@ pub struct InkSettings {
     /// Halftone screen angle (degrees); `None`: the ink's default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub angle: Option<f64>,
+    /// A spot ink prints as process inks: no plate of its own, its color on the process plates.
+    /// Off by default. [`PrintOutput::spots_to_process`] converts every spot ink whatever this
+    /// says; process inks and Registration ignore it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub convert_to_process: bool,
 }
 
 impl Default for InkSettings {
     fn default() -> Self {
-        Self { name: String::new(), print: true, frequency: None, angle: None }
+        Self { name: String::new(), print: true, frequency: None, angle: None, convert_to_process: false }
     }
 }
 
-/// An ink of a separation, with its options resolved ([`super::inks`]).
+/// An ink of a separation, with its options resolved ([`super::print_inks`],
+/// [`super::document_inks`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintInk {
@@ -322,6 +485,10 @@ pub struct PrintInk {
     pub print: bool,
     pub frequency: f64,
     pub angle: f64,
+    /// A spot ink printing as process inks (its own option or Convert All Spot Colors to
+    /// Process): it has no plate.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub convert_to_process: bool,
 }
 
 /// The default halftone screen ruling (lpi).
@@ -432,7 +599,14 @@ impl PrintSettings {
         within("placement.y", self.placement.y, -14_400.0, 14_400.0, " pt")?;
         within("scale.width", self.scale.width, 1.0, 1000.0, "%")?;
         within("scale.height", self.scale.height, 1.0, 1000.0, "%")?;
+        if self.scale.linked && self.scale.width != self.scale.height {
+            return Err(PdfError::BadSetting(format!(
+                "scale: width ({}%) and height ({}%) must be equal while scale.linked is on",
+                self.scale.width, self.scale.height
+            )));
+        }
         within("overlap", self.overlap, 0.0, 720.0, " pt")?;
+        within("gutter", self.gutter, 0.0, 720.0, " pt")?;
         within("margin", self.margin, 0.0, 144.0, " pt")?;
         within("tileOrigin.x", self.tile_origin.x, -14_400.0, 14_400.0, " pt")?;
         within("tileOrigin.y", self.tile_origin.y, -14_400.0, 14_400.0, " pt")?;
