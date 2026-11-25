@@ -1,118 +1,98 @@
 //! Paragraph panel menu › Hyphenation… (or `ui.hyphenation`): the Hyphenation checkbox and the
 //! limits automatic hyphenation keeps to in the paragraphs the Paragraph panel acts on: Words
 //! Longer Than, After First, Before Last, Hyphen Limit, Hyphenation Zone and Hyphenate Capitalized
-//! Words. The dialog opens on the values the Paragraph panel shows. OK runs `text.setFormat` with
-//! the values that changed, as one undo step, and paragraphs that differ keep the values left alone.
+//! Words. The dialog opens on the values the Paragraph panel shows (blank fields and dashed
+//! checkboxes where paragraphs in scope disagree). OK runs `text.setFormat` with the values that
+//! changed, as one undo step, and paragraphs that differ keep the values left alone.
 //!
 //! Fields: `hyphenate`, `wordsLongerThan` (letters, 1..25), `afterFirst` and `beforeLast`
 //! (letters, 1..15), `hyphenLimit` (hyphens, 0..25, 0: no limit), `hyphenationZone` (pt) and
-//! `hyphenateCapitalized`, as `text.setFormat` takes them, and `__initial` (the values it opened
-//! with).
+//! `hyphenateCapitalized`, as `text.setFormat` takes them.
 
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+// PLAN: assumed paths of `UnitKind` and `LengthUnits`
+use craft::ui::runtime::env::{LengthUnits, UnitKind};
 use serde_json::{Map, Value, json};
 
-use super::swatch_options::{grid, label};
-use super::{DialogSpec, form};
-use crate::state::Dialog;
-use crate::{VectorzApp, widgets};
+use super::warichu::set_shared;
+use crate::VectorzApp;
 
 /// The dialog kind of Hyphenation.
 pub const KIND: &str = "hyphenation";
 
-/// The field holding the values the dialog opened with.
-const INITIAL: &str = "__initial";
+/// The check boxes.
+const FLAGS: [&str; 2] = ["hyphenate", "hyphenateCapitalized"];
+/// The numbers: (field, range).
+const NUMBERS: [(&str, i64, i64); 5] =
+    [("wordsLongerThan", 1, 25), ("afterFirst", 1, 15), ("beforeLast", 1, 15), ("hyphenLimit", 0, 25), ("hyphenationZone", 0, 0)];
 
-pub(super) const SPEC: DialogSpec = DialogSpec { heading: |_| tl!("Hyphenation").into(), body, confirm, min_width: 300.0, ..DialogSpec::FORM };
+/// The rows of the dialog; the zone is shown in `lengths`.
+fn rows(lengths: LengthUnits) -> Vec<Param> {
+    let count =
+        |(key, lo, hi): (&str, i64, i64), label, default, unit| Param::new(key, label, ParamKind::int(Some(lo), Some(hi), default)).unit(unit);
+    vec![
+        Param::new(FLAGS[0], tl!("Hyphenation"), ParamKind::bool(false)),
+        count(NUMBERS[0], tl!("Words Longer Than:"), 5, UnitKind::Letters),
+        count(NUMBERS[1], tl!("After First:"), 3, UnitKind::Letters),
+        count(NUMBERS[2], tl!("Before Last:"), 3, UnitKind::Letters),
+        count(NUMBERS[3], tl!("Hyphen Limit:"), 0, UnitKind::Hyphens),
+        Param::number(NUMBERS[4].0, tl!("Hyphenation Zone:"), 0.0, 1.0, 2).length(lengths).bounds(Some(0.0), None),
+        Param::new(FLAGS[1], tl!("Hyphenate Capitalized Words"), ParamKind::bool(true)),
+    ]
+}
 
 /// Open Hyphenation on the paragraph attributes the Paragraph panel shows.
 pub fn open(app: &mut VectorzApp) -> Result<Value, String> {
-    let (_, para) = crate::panels::character::text_style(app).ok_or("select some type first")?;
-    let h = &para.hyphenation;
-    let values = json!({
-        "hyphenate": para.hyphenate,
-        "wordsLongerThan": h.words_longer_than,
-        "afterFirst": h.after_first,
-        "beforeLast": h.before_last,
-        "hyphenLimit": h.hyphen_limit,
-        "hyphenationZone": h.zone,
-        "hyphenateCapitalized": h.capitalized,
-    });
-    let mut fields = values.clone();
-    fields[INITIAL] = values;
-    app.ui.dialog = Some(Dialog::new(KIND, fields));
+    crate::panels::character::text_style(app).ok_or("select some type first")?;
+    let mut fields = DialogFields::new();
+    set_shared(&mut fields, FLAGS[0], crate::panels::paragraph::shared_hyphenate(app));
+    set_shared(&mut fields, FLAGS[1], crate::panels::paragraph::shared_hyphenation_field(app, |h| h.capitalized));
+    set_shared(&mut fields, NUMBERS[0].0, crate::panels::paragraph::shared_hyphenation_field(app, |h| h.words_longer_than).map(i64::from));
+    set_shared(&mut fields, NUMBERS[1].0, crate::panels::paragraph::shared_hyphenation_field(app, |h| h.after_first).map(i64::from));
+    set_shared(&mut fields, NUMBERS[2].0, crate::panels::paragraph::shared_hyphenation_field(app, |h| h.before_last).map(i64::from));
+    set_shared(&mut fields, NUMBERS[3].0, crate::panels::paragraph::shared_hyphenation_field(app, |h| h.hyphen_limit).map(i64::from));
+    set_shared(&mut fields, NUMBERS[4].0, crate::panels::paragraph::shared_hyphenation_zone(app));
+    let initial = fields.clone();
+    let ctx = app.ui_ctx.clone().ok_or("no window")?;
+    let lengths = crate::canvas::rulers::general_lengths(app);
+    let dialog = HostedParamDialog::new(&ctx, KIND, fields, move |_| ParamDialog::new(KIND, tl!("Hyphenation"), rows(lengths)));
+    super::host::open_held(app, dialog, move |app, result| {
+        let p = params(&result.fields, &initial);
+        if p.is_empty() {
+            return Ok(());
+        }
+        crate::panels::paragraph::run_on_paragraphs(app, "text.setFormat", Value::Object(p)).map(|_| ())
+    })
+    .ok_or("no window")?;
     Ok(Value::Null)
 }
 
-fn body(app: &mut VectorzApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
-    let unit = app.session.general_unit();
-    form::check(ui, d, "hyphenate", tl!("Hyphenation"));
-    ui.add_space(8.0);
-    // The whole-number fields: (field, label, unit, range).
-    let counts = [
-        ("wordsLongerThan", tl!("Words Longer Than:"), tl!("letters"), (1.0, 25.0)),
-        ("afterFirst", tl!("After First:"), tl!("letters"), (1.0, 15.0)),
-        ("beforeLast", tl!("Before Last:"), tl!("letters"), (1.0, 15.0)),
-        ("hyphenLimit", tl!("Hyphen Limit:"), tl!("hyphens"), (0.0, 25.0)),
-    ];
-    grid(ui, |ui| {
-        for (key, text, suffix, (lo, hi)) in counts {
-            label(ui, text);
-            ui.horizontal(|ui| {
-                if let Some(v) = widgets::range_field(ui, ("hyphenation", key), d.f64(key, lo), lo..=hi, "", 0, 60.0) {
-                    d.fields.insert(key.into(), json!(v));
-                }
-                ui.label(suffix);
-            });
-            ui.end_row();
-        }
-        label(ui, tl!("Hyphenation Zone:"));
-        form::length(ui, d, "hyphenationZone", unit, 90.0);
-        ui.end_row();
-    });
-    ui.add_space(8.0);
-    form::check(ui, d, "hyphenateCapitalized", tl!("Hyphenate Capitalized Words"));
-    false
-}
-
 /// `text.setFormat` parameters: the fields that differ from the values the dialog opened with.
-fn params(d: &Dialog) -> Map<String, Value> {
-    let initial = d.fields.get(INITIAL).and_then(Value::as_object);
+fn params(fields: &DialogFields, initial: &DialogFields) -> Map<String, Value> {
     let mut p = Map::new();
-    for key in ["hyphenate", "wordsLongerThan", "afterFirst", "beforeLast", "hyphenLimit", "hyphenationZone", "hyphenateCapitalized"] {
-        let Some(v) = d.fields.get(key) else { continue };
-        // Numbers are compared as numbers (a field stores 3 as 3.0), and a length typed with its
-        // unit ("6 mm") is sent in points.
-        let v = if v.is_boolean() { v.clone() } else { json!(d.f64(key, 0.0)) };
-        let same = match (initial.and_then(|m| m.get(key)), &v) {
-            (Some(Value::Bool(was)), Value::Bool(now)) => was == now,
-            (Some(was), now) => was.as_f64().zip(now.as_f64()).is_some_and(|(a, b)| a == b),
-            (None, _) => false,
-        };
-        if !same {
-            p.insert(key.into(), v);
+    for key in FLAGS {
+        if let Some(v) = fields.bool(key).filter(|v| initial.bool(key) != Some(*v)) {
+            p.insert(key.into(), json!(v));
+        }
+    }
+    for (key, ..) in NUMBERS {
+        if let Some(v) = fields.number(key).filter(|v| initial.number(key) != Some(*v)) {
+            p.insert(key.into(), json!(v));
         }
     }
     p
 }
 
-fn confirm(app: &mut VectorzApp, d: &Dialog) -> Result<Value, String> {
-    let p = params(d);
-    app.ui.dialog = None;
-    if p.is_empty() {
-        return Ok(Value::Null);
-    }
-    crate::panels::paragraph::run_on_paragraphs(app, "text.setFormat", Value::Object(p))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::warichu::driver;
     use super::*;
     use vectorz_engine::Session;
     use vectorz_engine::doc::{HyphenationOptions, NodeId, NodeKind, ParaStyle};
 
     /// A selected area type object with two paragraphs.
     fn app() -> (VectorzApp, u64) {
-        let mut app = VectorzApp::new(Session::new(), Default::default());
+        let mut app = crate::testing::windowed(VectorzApp::new(Session::new(), Default::default()));
         app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
         let id = app.run("text.create", json!({"x": 10, "y": 10, "text": "One\nTwo", "area": {"width": 200, "height": 100}})).unwrap()["id"]
             .as_u64()
@@ -134,19 +114,18 @@ mod tests {
     fn hyphenation_dialog_sets_the_paragraphs_options() {
         let (mut app, id) = app();
         app.run("ui.hyphenation", json!({})).unwrap();
-        let d = app.ui.dialog.clone().expect("Hyphenation opened");
-        assert_eq!(d.kind, KIND);
-        assert_eq!((d.bool("hyphenate"), d.f64("wordsLongerThan", 0.0), d.f64("hyphenLimit", -1.0)), (false, 5.0, 0.0));
-        assert!(d.bool("hyphenateCapitalized"));
-        let d = app.ui.dialog.as_mut().unwrap();
-        d.fields.insert("hyphenate".into(), json!(true));
-        d.fields.insert("wordsLongerThan".into(), json!(8));
-        d.fields.insert("hyphenLimit".into(), json!(2));
-        d.fields.insert("hyphenationZone".into(), json!("1 in"));
-        d.fields.insert("hyphenateCapitalized".into(), json!(false));
+        let f = driver::fields(&app);
+        assert_eq!((f.bool("hyphenate"), f.number("wordsLongerThan"), f.number("hyphenLimit")), (Some(false), Some(5.0), Some(0.0)));
+        assert_eq!(f.bool("hyphenateCapitalized"), Some(true));
+        driver::set(&mut app, "hyphenate", json!(true));
+        driver::set(&mut app, "wordsLongerThan", json!(8));
+        driver::set(&mut app, "hyphenLimit", json!(2));
+        // A length row holds points (1 in), whatever unit its field shows.
+        driver::set(&mut app, "hyphenationZone", json!(72));
+        driver::set(&mut app, "hyphenateCapitalized", json!(false));
         let undo = app.session.active().unwrap().history.undo.len();
-        super::super::confirm(&mut app).unwrap();
-        assert!(app.ui.dialog.is_none());
+        driver::ok(&mut app);
+        assert!(!driver::is_open(&app));
         let want = HyphenationOptions { words_longer_than: 8, hyphen_limit: 2, zone: 72.0, capitalized: false, ..HyphenationOptions::default() };
         for p in [paras(&app, id).0, paras(&app, id).1] {
             assert!(p.hyphenate);
@@ -155,28 +134,26 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.undo.len(), undo + 1);
     }
 
-    /// OK sends only the values that changed: paragraphs whose other options differ keep them.
+    /// OK sends only the values that changed: paragraphs whose other options differ keep them, and
+    /// OK with nothing edited adds no undo step.
     #[test]
     fn hyphenation_dialog_leaves_unchanged_values_alone() {
         let (mut app, id) = app();
         app.run("text.setFormat", json!({"ids": [id], "afterFirst": 2, "start": 5, "end": 5})).unwrap();
         app.run("ui.hyphenation", json!({})).unwrap();
-        let d = app.ui.dialog.as_mut().unwrap();
-        d.fields.insert("beforeLast".into(), json!(4));
-        // Edited and set back to the value it opened with, as a field stores it.
-        d.fields.insert("afterFirst".into(), json!(3.0));
-        super::super::confirm(&mut app).unwrap();
+        assert!(driver::fields(&app).is_mixed("afterFirst"));
+        driver::set(&mut app, "beforeLast", json!(4));
+        driver::ok(&mut app);
         let (first, second) = paras(&app, id);
         assert_eq!((first.hyphenation.after_first, first.hyphenation.before_last), (3, 4));
         assert_eq!((second.hyphenation.after_first, second.hyphenation.before_last), (2, 4));
-        // Nothing changed: no undo step.
         let undo = app.session.active().unwrap().history.undo.len();
         app.run("ui.hyphenation", json!({})).unwrap();
-        super::super::confirm(&mut app).unwrap();
+        driver::ok(&mut app);
         assert_eq!(app.session.active().unwrap().history.undo.len(), undo);
         // With no type selected the dialog does not open.
         app.run("select.set", json!({"ids": []})).unwrap();
         assert!(app.run("ui.hyphenation", json!({})).is_err());
-        assert!(app.ui.dialog.is_none());
+        assert!(!driver::is_open(&app));
     }
 }
