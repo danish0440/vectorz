@@ -8,6 +8,12 @@ description = "VectorZ MCP server: JSON-RPC 2.0 over stdio, driving a running ap
 [lints]
 workspace = true
 
+[features]
+default = ["bundled-fonts"]
+# The fonts vectorz-text bundles for documents, through the engine's `bundled-fonts`, as
+# vectorz-ui-egui's. Off, for an embedder that supplies every document font at run time.
+bundled-fonts = ["vectorz-engine/bundled-fonts"]
+
 [dependencies]
 vectorz-engine = { workspace = true }
 vectorz-render = { workspace = true }
@@ -16,10 +22,12 @@ vectorz-format = { workspace = true }
 vectorz-tools = { workspace = true }
 vectorz-geom = { workspace = true }
 vectorz-doc = { workspace = true }
+craft = { workspace = true, features = ["automation"] }
 serde_json = { workspace = true }
 log = { workspace = true }
 
 image = { workspace = true }
+craft-image-codecs = { workspace = true }
 
 [dev-dependencies]
 vectorz-testkit = { workspace = true }

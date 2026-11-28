@@ -8,10 +8,14 @@ description = "VectorZ tool state machines: pointer events in, commands and over
 [lints]
 workspace = true
 
+[features]
+testing = []
+
 [dependencies]
 vectorz-geom = { workspace = true }
 vectorz-color = { workspace = true }
 vectorz-doc = { workspace = true }
+vectorz-brush = { workspace = true }
 vectorz-pathops = { workspace = true }
 vectorz-effects = { workspace = true }
 vectorz-text = { workspace = true }
@@ -20,6 +24,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-image = { workspace = true }
+vectorz-tools = { workspace = true, features = ["testing"] }
+craft-image-codecs = { workspace = true }
 # The tests lay type out in the bundled fonts (the workspace leaves turning them on to the engine).
 vectorz-text = { workspace = true, features = ["test-fonts", "bundled-fonts"] }
+# How many times a path is flattened, and how often art is measured for the locked artboards.
+vectorz-doc = { workspace = true, features = ["spine-count", "locked-artboard-count"] }
